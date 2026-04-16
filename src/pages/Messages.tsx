@@ -41,11 +41,24 @@ import {
   registerStoryView,
   sendLocationPing,
   sendMessage,
+  mapApiMessageToAppMessage,
+  mapApiStory,
 } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { useRealtime } from "@/contexts/RealtimeContext";
 import { useToast } from "@/hooks/use-toast";
+import { buildWebSocketUrl } from "@/lib/realtime";
 import type { AppMatch, AppMessage, AppStory, DateSuggestion } from "@/lib/types";
 
 const QUICK_REACTIONS = ["❤️", "😂", "🔥", "👏"];
+
+function debugMessages(message: string, details?: Record<string, unknown>) {
+  if (!import.meta.env.DEV) {
+    return;
+  }
+
+  console.debug(`[bonding:messages] ${message}`, details ?? {});
+}
 
 interface PendingAttachment {
   file: File;
@@ -68,8 +81,31 @@ interface ActiveStoryState {
   storyIndex: number;
 }
 
+function mergeMessageList(currentMessages: AppMessage[], nextMessage: AppMessage) {
+  const filteredMessages = currentMessages.filter((message) => {
+    if (message.id === nextMessage.id) {
+      return false;
+    }
+    if (nextMessage.clientRequestId && message.clientRequestId === nextMessage.clientRequestId) {
+      return false;
+    }
+    return true;
+  });
+
+  return [...filteredMessages, nextMessage].sort((a, b) => Number(a.id) - Number(b.id));
+}
+
+function upsertStoryCollection(currentStories: AppStory[], nextStory: AppStory) {
+  return [nextStory, ...currentStories.filter((story) => (
+    story.id !== nextStory.id
+    && (!nextStory.clientRequestId || story.clientRequestId !== nextStory.clientRequestId)
+  ))];
+}
+
 const Messages = () => {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const { presenceByUserId, subscribeToStoryEvents } = useRealtime();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedMatch, setSelectedMatch] = useState<AppMatch | null>(null);
   const [search, setSearch] = useState("");
@@ -97,6 +133,17 @@ const Messages = () => {
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const storyFileInputRef = useRef<HTMLInputElement>(null);
+  const matchesRef = useRef<AppMatch[]>([]);
+  const selectedMatchRef = useRef<AppMatch | null>(null);
+  const selectedChatId = searchParams.get("chat");
+
+  useEffect(() => {
+    matchesRef.current = matches;
+  }, [matches]);
+
+  useEffect(() => {
+    selectedMatchRef.current = selectedMatch;
+  }, [selectedMatch]);
 
   const refreshSidebarData = useCallback(async (options?: { initial?: boolean }) => {
     const initial = options?.initial ?? false;
@@ -104,35 +151,64 @@ const Messages = () => {
       setIsLoadingMatches(true);
     }
 
-    const [nextMatches, nextMatchStories, nextMyStories] = await Promise.all([
+    const [matchesResult, matchStoriesResult, myStoriesResult] = await Promise.allSettled([
       fetchMatches(),
       fetchStoriesFeed(),
       fetchMyStories(),
     ]);
 
-    setMatches(nextMatches);
-    setMatchStories(nextMatchStories);
-    setMyStories(nextMyStories);
+    if (matchesResult.status === "fulfilled") {
+      setMatches(matchesResult.value);
+    }
+    if (matchStoriesResult.status === "fulfilled") {
+      setMatchStories(matchStoriesResult.value);
+    }
+    if (myStoriesResult.status === "fulfilled") {
+      setMyStories(myStoriesResult.value);
+    }
     setErrorMessage("");
+    debugMessages("sidebar bootstrap concluído", {
+      initial,
+      matchesLoaded: matchesResult.status === "fulfilled",
+      feedStoriesLoaded: matchStoriesResult.status === "fulfilled",
+      myStoriesLoaded: myStoriesResult.status === "fulfilled",
+    });
 
-    const selectedChatId = searchParams.get("chat");
     setSelectedMatch((currentSelected) => {
+      const nextMatches = matchesResult.status === "fulfilled" ? matchesResult.value : matchesRef.current;
+      const fallbackSelection = nextMatches[0] ?? null;
+
       if (selectedChatId) {
-        return nextMatches.find((match) => match.id === selectedChatId) ?? nextMatches[0] ?? null;
+        const nextSelected = nextMatches.find((match) => match.id === selectedChatId) ?? fallbackSelection;
+        if (!nextSelected) {
+          return null;
+        }
+        return currentSelected?.id === nextSelected.id ? currentSelected : nextSelected;
       }
+
       if (!currentSelected) {
-        return nextMatches[0] ?? null;
+        return fallbackSelection;
       }
-      return nextMatches.find((match) => match.id === currentSelected.id) ?? currentSelected;
+
+      const updatedCurrent = nextMatches.find((match) => match.id === currentSelected.id);
+      if (!updatedCurrent) {
+        return fallbackSelection;
+      }
+
+      return updatedCurrent.id === currentSelected.id ? currentSelected : updatedCurrent;
     });
 
     if (initial) {
       setIsLoadingMatches(false);
     }
-  }, [searchParams]);
+  }, [selectedChatId]);
 
-  const refreshConversation = useCallback(async (match: AppMatch, options?: { silent?: boolean }) => {
+  const refreshConversation = useCallback(async (
+    match: AppMatch,
+    options?: { silent?: boolean; markRead?: boolean },
+  ) => {
     const silent = options?.silent ?? false;
+    const markRead = options?.markRead ?? true;
     if (!match.conversationId) {
       return;
     }
@@ -141,23 +217,32 @@ const Messages = () => {
       setIsLoadingMessages(true);
     }
 
-    const nextMessages = await fetchMessages(match.conversationId);
+    debugMessages("carregando conversa", {
+      matchId: match.id,
+      conversationId: match.conversationId,
+      silent,
+      markRead,
+    });
+
+    const nextMessages = await fetchMessages(match.conversationId, user?.id);
     setMessages((prev) => ({
       ...prev,
       [match.id]: nextMessages,
     }));
     setErrorMessage("");
-    await markConversationAsRead(match.conversationId);
-    setMatches((prev) =>
-      prev.map((item) =>
-        item.id === match.id ? { ...item, unread: false } : item,
-      ),
-    );
+    if (markRead) {
+      await markConversationAsRead(match.conversationId);
+      setMatches((prev) =>
+        prev.map((item) =>
+          item.id === match.id ? { ...item, unread: false } : item,
+        ),
+      );
+    }
 
     if (!silent) {
       setIsLoadingMessages(false);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     return () => {
@@ -201,20 +286,15 @@ const Messages = () => {
     };
   }, [refreshSidebarData, toast]);
 
-  useEffect(() => {
-    const intervalId = window.setInterval(() => {
-      if (document.visibilityState !== "visible") {
-        return;
-      }
-      void refreshSidebarData().catch(() => undefined);
-    }, 15000);
-
-    return () => window.clearInterval(intervalId);
-  }, [refreshSidebarData]);
-
-  const filteredMatches = matches.filter((match) =>
-    match.user.name.toLowerCase().includes(search.toLowerCase()),
-  );
+  const filteredMatches = matches
+    .filter((match) => match.user.name.toLowerCase().includes(search.toLowerCase()))
+    .map((match) => ({
+      ...match,
+      user: {
+        ...match.user,
+        online: presenceByUserId[match.user.userId] ?? match.user.online,
+      },
+    }));
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -260,19 +340,104 @@ const Messages = () => {
   }, [refreshConversation, selectedMatch, toast]);
 
   useEffect(() => {
-    if (!selectedMatch?.conversationId) {
+    return subscribeToStoryEvents((event) => {
+      if (event.entity !== "story") {
+        return;
+      }
+
+      if (event.type === "story.deleted") {
+        const storyId = Number((event.data as { id: number }).id);
+        setMyStories((current) => current.filter((story) => story.id !== storyId));
+        setMatchStories((current) => current.filter((story) => story.id !== storyId));
+        return;
+      }
+
+      const story = mapApiStory(event.data as never);
+
+      if (story.authorId === user?.id) {
+        setMyStories((current) => upsertStoryCollection(current, story));
+        return;
+      }
+
+      const matchedUserIds = new Set(matchesRef.current.map((match) => match.user.userId));
+      if (!matchedUserIds.has(story.authorId)) {
+        return;
+      }
+
+      setMatchStories((current) => upsertStoryCollection(current, story));
+    });
+  }, [subscribeToStoryEvents, user?.id]);
+
+  useEffect(() => {
+    if (!selectedMatch?.conversationId || !user) {
       return;
     }
 
-    const intervalId = window.setInterval(() => {
-      if (document.visibilityState !== "visible") {
-        return;
-      }
-      void refreshConversation(selectedMatch, { silent: true }).catch(() => undefined);
-    }, 4000);
+    const currentMatchId = selectedMatch.id;
+    const currentConversationId = selectedMatch.conversationId;
+    const socketUrl = buildWebSocketUrl(`/ws/conversations/${currentConversationId}/`);
+    if (!socketUrl) {
+      return;
+    }
 
-    return () => window.clearInterval(intervalId);
-  }, [refreshConversation, selectedMatch]);
+    debugMessages("abrindo websocket da conversa", {
+      matchId: currentMatchId,
+      conversationId: currentConversationId,
+    });
+    const socket = new WebSocket(socketUrl);
+    const pingTimer = window.setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 30000);
+
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+
+        if (payload.type === "message.created" || payload.type === "message.updated") {
+          const nextMessage = mapApiMessageToAppMessage(payload.data, user.id);
+          setMessages((prev) => {
+            const currentMessages = prev[currentMatchId] || [];
+            return {
+              ...prev,
+              [currentMatchId]: mergeMessageList(currentMessages, nextMessage),
+            };
+          });
+          setMatches((prev) =>
+            prev.map((match) =>
+              match.id === currentMatchId
+                ? {
+                    ...match,
+                    lastMessage: nextMessage.text || (nextMessage.type === "video" ? "Vídeo" : nextMessage.type === "image" ? "Foto" : "Nova mensagem"),
+                    timestamp: "agora",
+                    unread: !nextMessage.isMine,
+                  }
+                : match,
+            ),
+          );
+        }
+
+        if (payload.type === "message.read") {
+          const currentMatch = selectedMatchRef.current;
+          if (currentMatch?.id === currentMatchId) {
+            void refreshConversation(currentMatch, { silent: true, markRead: false });
+          }
+        }
+      } catch {
+        // ignore malformed websocket payloads
+      }
+    };
+
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ type: "ping" }));
+    };
+
+    return () => {
+      window.clearInterval(pingTimer);
+      socket.close();
+    };
+  }, [refreshConversation, selectedMatch?.conversationId, selectedMatch?.id, user]);
 
   const openChat = (match: AppMatch) => {
     setSelectedMatch(match);
@@ -336,16 +501,19 @@ const Messages = () => {
 
     setIsSending(true);
     try {
+      const clientRequestId = crypto.randomUUID();
       const sentMessage = await sendMessage({
         conversationId: selectedMatch.conversationId,
         content: newMessage.trim(),
         file: pendingAttachment?.file ?? null,
         type: pendingAttachment?.type ?? "text",
         isViewOnce: pendingAttachment?.isViewOnce ?? false,
+        currentUserId: user?.id,
+        clientRequestId,
       });
       setMessages((prev) => ({
         ...prev,
-        [selectedMatch.id]: [...(prev[selectedMatch.id] || []), sentMessage],
+        [selectedMatch.id]: mergeMessageList(prev[selectedMatch.id] || [], sentMessage),
       }));
       setMatches((prev) =>
         prev.map((match) =>
@@ -380,11 +548,13 @@ const Messages = () => {
     }
 
     try {
+      const clientRequestId = crypto.randomUUID();
       const story = await createStory({
         file: storyFile,
         mediaType: storyFile.type.startsWith("video/") ? "video" : "image",
+        clientRequestId,
       });
-      setMyStories((current) => [story, ...current]);
+      setMyStories((current) => upsertStoryCollection(current, story));
       toast({
         title: "Story publicado",
         description: "Seu story foi enviado para seus matches.",

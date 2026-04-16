@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Globe, Music2, SlidersHorizontal, Sparkles } from "lucide-react";
+import { Globe, Music2, SlidersHorizontal, Sparkles, UserRound } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import SpotifyPreviewCard from "@/components/SpotifyPreviewCard";
 import { useAppExperience } from "@/contexts/AppExperienceContext";
 import { fetchMyProfile, searchSpotifyTracks, updateMyProfileSettings } from "@/lib/api";
 import { getCopy } from "@/lib/copy";
@@ -34,54 +35,45 @@ const Settings = () => {
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [isSearchingSpotify, setIsSearchingSpotify] = useState(false);
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
+  const latestLoadIdRef = useRef(0);
+
+  const handleSafeBack = useCallback(() => {
+    if (window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+
+    navigate("/app/profile", { replace: true });
+  }, [navigate]);
 
   const loadProfile = useCallback(async () => {
+    const loadId = latestLoadIdRef.current + 1;
+    latestLoadIdRef.current = loadId;
     setIsLoadingProfile(true);
     try {
       const nextProfile = await fetchMyProfile();
+      if (latestLoadIdRef.current !== loadId) {
+        return;
+      }
       setProfile(nextProfile);
       setAllowDateSuggestions(nextProfile.allowDateSuggestions);
       setSelectedTrack(nextProfile.spotifyTrack);
       setErrorMessage("");
     } catch (error) {
+      if (latestLoadIdRef.current !== loadId) {
+        return;
+      }
       setErrorMessage(error instanceof Error ? error.message : "Não foi possível carregar suas preferências.");
     } finally {
-      setIsLoadingProfile(false);
+      if (latestLoadIdRef.current === loadId) {
+        setIsLoadingProfile(false);
+      }
     }
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
-
-    const safeLoadProfile = async () => {
-      try {
-        const nextProfile = await fetchMyProfile();
-        if (!isMounted) {
-          return;
-        }
-        setProfile(nextProfile);
-        setAllowDateSuggestions(nextProfile.allowDateSuggestions);
-        setSelectedTrack(nextProfile.spotifyTrack);
-        setErrorMessage("");
-      } catch (error) {
-        if (!isMounted) {
-          return;
-        }
-        setErrorMessage(error instanceof Error ? error.message : "Não foi possível carregar suas preferências.");
-      } finally {
-        if (isMounted) {
-          setIsLoadingProfile(false);
-        }
-      }
-    };
-
-    setIsLoadingProfile(true);
-    void safeLoadProfile();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+    void loadProfile();
+  }, [loadProfile]);
 
   const handleSpotifySearch = async () => {
     if (!spotifyQuery.trim()) {
@@ -144,7 +136,7 @@ const Settings = () => {
         </Alert>
         <div className="flex gap-3">
           <Button onClick={() => void loadProfile()}>Tentar novamente</Button>
-          <Button variant="outline" onClick={() => navigate(-1)}>Voltar</Button>
+          <Button variant="outline" onClick={handleSafeBack}>Voltar</Button>
         </div>
       </section>
     );
@@ -260,17 +252,13 @@ const Settings = () => {
           </div>
 
           {selectedTrack ? (
-            <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-background/40 p-3">
-              {selectedTrack.imageUrl ? (
-                <img src={selectedTrack.imageUrl} alt={selectedTrack.name} className="h-12 w-12 rounded-lg object-cover" />
-              ) : null}
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-body-bold text-foreground">{selectedTrack.name}</p>
-                <p className="truncate text-xs text-muted-foreground">{selectedTrack.artist}</p>
+            <div className="space-y-3">
+              <SpotifyPreviewCard track={selectedTrack} />
+              <div className="flex justify-end">
+                <Button variant="ghost" onClick={() => setSelectedTrack(null)}>
+                  Remover
+                </Button>
               </div>
-              <Button variant="ghost" onClick={() => setSelectedTrack(null)}>
-                Remover
-              </Button>
             </div>
           ) : null}
 

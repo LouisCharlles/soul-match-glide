@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { AlertCircle, BadgeCheck, MapPin, Briefcase, GraduationCap, Heart, Music2, Users, TrendingUp, Settings, Edit, LogOut, Palette, Plus, Camera } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import SpotifyPreviewCard from "@/components/SpotifyPreviewCard";
 import { useToast } from "@/hooks/use-toast";
 import { useAppExperience } from "@/contexts/AppExperienceContext";
 import { createVerificationAttempt, fetchMyProfile, fetchVerificationAttempts } from "@/lib/api";
@@ -240,15 +241,7 @@ const Profile = () => {
         </div>
 
         {profile.spotifyTrack ? (
-          <a
-            href={profile.spotifyTrack.url}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-2 rounded-xl border border-white/10 px-4 py-3 text-sm text-foreground transition-colors hover:bg-accent/40"
-          >
-            <Music2 className="h-4 w-4 text-[#1DB954]" />
-            {profile.spotifyTrack.name} · {profile.spotifyTrack.artist}
-          </a>
+          <SpotifyPreviewCard track={profile.spotifyTrack} />
         ) : null}
       </div>
 

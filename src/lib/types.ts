@@ -27,6 +27,7 @@ export interface AppStoryReaction {
 
 export interface AppStory {
   id: number;
+  clientRequestId?: string | null;
   authorId: number;
   authorName: string;
   mediaType: "image" | "video";
@@ -43,6 +44,7 @@ export interface AppPhoto {
   url: string;
   isPrimary: boolean;
   order: number;
+  clientRequestId?: string | null;
 }
 
 export type ReportReason = "spam" | "fake" | "abuse" | "inappropriate" | "other";
@@ -72,6 +74,7 @@ export interface AppUserProfile {
   online: boolean;
   verified?: boolean;
   relationshipIntent?: string;
+  spotifyTrack?: AppSpotifyTrack | null;
 }
 
 export interface ProfileStats {
@@ -131,6 +134,7 @@ export interface AppMatch {
 
 export interface AppMessage {
   id: string;
+  clientRequestId?: string | null;
   senderId: string;
   text: string;
   timestamp: string;

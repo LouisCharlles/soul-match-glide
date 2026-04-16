@@ -58,6 +58,7 @@ interface ApiPhoto {
   id: number;
   image: string | null;
   image_url: string | null;
+  client_request_id?: string | null;
   order?: number;
   is_primary?: boolean;
 }
@@ -74,6 +75,7 @@ interface ApiStory {
   media_type: "image" | "video";
   media: string | null;
   media_url: string | null;
+  client_request_id?: string | null;
   caption: string;
   expires_at: string;
   created_at: string;
@@ -173,6 +175,7 @@ interface ApiMessage {
   content: string;
   message_type: "text" | "image" | "video" | "story_reply";
   media_url?: string | null;
+  client_request_id?: string | null;
   story?: number | null;
   reply_to_message?: number | null;
   is_view_once?: boolean;
@@ -285,6 +288,10 @@ function getStoredTokens(): AuthTokens | null {
   }
 
   return { access, refresh };
+}
+
+export function getStoredAccessToken() {
+  return getStoredTokens()?.access || null;
 }
 
 export function storeTokens(tokens: AuthTokens) {
@@ -497,6 +504,14 @@ function mapProfileToCard(profile: ApiProfile): AppUserProfile {
     online: profile.is_online,
     verified: profile.is_verified,
     relationshipIntent: profile.relationship_intent,
+    spotifyTrack: profile.spotify_track ? {
+      id: profile.spotify_track.id,
+      name: profile.spotify_track.name,
+      artist: profile.spotify_track.artist,
+      url: profile.spotify_track.url,
+      imageUrl: profile.spotify_track.image_url,
+      previewUrl: profile.spotify_track.preview_url ?? null,
+    } : null,
   };
 }
 
@@ -511,6 +526,7 @@ function mapApiPhoto(photo: ApiPhoto): AppPhoto | null {
     url: resolveMediaUrl(url),
     isPrimary: Boolean(photo.is_primary),
     order: photo.order ?? 0,
+    clientRequestId: photo.client_request_id ?? null,
   };
 }
 
@@ -555,9 +571,10 @@ function mapProfileToAppProfile(profile: ApiProfile): AppProfile {
   };
 }
 
-function mapApiStory(story: ApiStory): AppStory {
+export function mapApiStory(story: ApiStory): AppStory {
   return {
     id: story.id,
+    clientRequestId: story.client_request_id ?? null,
     authorId: story.author.id,
     authorName: story.author.email,
     mediaType: story.media_type,
@@ -571,6 +588,32 @@ function mapApiStory(story: ApiStory): AppStory {
       emoji: reaction.emoji,
       userName: reaction.user.email,
     })),
+  };
+}
+
+export function mapApiMessageToAppMessage(message: ApiMessage, currentUserId: number): AppMessage {
+  return {
+    id: String(message.id),
+    clientRequestId: message.client_request_id ?? null,
+    senderId: String(message.sender.id),
+    text: message.content,
+    type: message.message_type,
+    mediaUrl: message.media_url ? resolveMediaUrl(message.media_url) : null,
+    isViewOnce: Boolean(message.is_view_once),
+    consumedAt: message.consumed_at || null,
+    storyId: message.story ?? null,
+    replyToMessageId: message.reply_to_message ? String(message.reply_to_message) : null,
+    reactions: (message.reactions || []).map((reaction) => ({
+      id: reaction.id,
+      emoji: reaction.emoji,
+      userName: reaction.user.email,
+    })),
+    timestamp: new Date(message.created_at).toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+    read: message.read,
+    isMine: message.sender.id === currentUserId,
   };
 }
 
@@ -851,11 +894,15 @@ export async function uploadProfilePhoto(payload: {
   order: number;
   isPrimary?: boolean;
   photoId?: number;
+  clientRequestId?: string;
 }) {
   const formData = new FormData();
   formData.append("image", payload.file);
   formData.append("order", String(payload.order));
   formData.append("is_primary", String(Boolean(payload.isPrimary)));
+  if (payload.clientRequestId) {
+    formData.append("client_request_id", payload.clientRequestId);
+  }
 
   const path = payload.photoId ? `/photos/${payload.photoId}/` : "/photos/";
   const method: HttpMethod = payload.photoId ? "PATCH" : "POST";
@@ -954,34 +1001,13 @@ export async function fetchMatches() {
   });
 }
 
-export async function fetchMessages(conversationId: number) {
+export async function fetchMessages(conversationId: number, currentUserId?: number) {
   const messages = await request<ApiMessage[]>(`/messages/?conversation=${conversationId}`, {
     auth: true,
   });
-  const currentUser = await fetchCurrentUser();
+  const resolvedCurrentUserId = currentUserId ?? (await fetchCurrentUser()).id;
 
-  return messages.map<AppMessage>((message) => ({
-    id: String(message.id),
-    senderId: String(message.sender.id),
-    text: message.content,
-    type: message.message_type,
-    mediaUrl: message.media_url ? resolveMediaUrl(message.media_url) : null,
-    isViewOnce: Boolean(message.is_view_once),
-    consumedAt: message.consumed_at || null,
-    storyId: message.story ?? null,
-    replyToMessageId: message.reply_to_message ? String(message.reply_to_message) : null,
-    reactions: (message.reactions || []).map((reaction) => ({
-      id: reaction.id,
-      emoji: reaction.emoji,
-      userName: reaction.user.email,
-    })),
-    timestamp: new Date(message.created_at).toLocaleTimeString("pt-BR", {
-      hour: "2-digit",
-      minute: "2-digit",
-    }),
-    read: message.read,
-    isMine: message.sender.id === currentUser.id,
-  }));
+  return messages.map((message) => mapApiMessageToAppMessage(message, resolvedCurrentUserId));
 }
 
 export async function sendMessage(payload: {
@@ -992,12 +1018,17 @@ export async function sendMessage(payload: {
   isViewOnce?: boolean;
   storyId?: number | null;
   replyToMessageId?: string | null;
+  currentUserId?: number;
+  clientRequestId?: string;
 }) {
   const body = new FormData();
   body.append("conversation", String(payload.conversationId));
   body.append("content", payload.content || "");
   body.append("message_type", payload.type || "text");
   body.append("is_view_once", String(Boolean(payload.isViewOnce)));
+  if (payload.clientRequestId) {
+    body.append("client_request_id", payload.clientRequestId);
+  }
   if (payload.file) {
     body.append("media", payload.file);
   }
@@ -1012,30 +1043,9 @@ export async function sendMessage(payload: {
     body,
     auth: true,
   });
-  const currentUser = await fetchCurrentUser();
+  const resolvedCurrentUserId = payload.currentUserId ?? (await fetchCurrentUser()).id;
 
-  return {
-    id: String(message.id),
-    senderId: String(message.sender.id),
-    text: message.content,
-    type: message.message_type,
-    mediaUrl: message.media_url ? resolveMediaUrl(message.media_url) : null,
-    isViewOnce: Boolean(message.is_view_once),
-    consumedAt: message.consumed_at || null,
-    storyId: message.story ?? null,
-    replyToMessageId: message.reply_to_message ? String(message.reply_to_message) : null,
-    reactions: (message.reactions || []).map((reaction) => ({
-      id: reaction.id,
-      emoji: reaction.emoji,
-      userName: reaction.user.email,
-    })),
-    timestamp: new Date(message.created_at).toLocaleTimeString("pt-BR", {
-      hour: "2-digit",
-      minute: "2-digit",
-    }),
-    read: message.read,
-    isMine: message.sender.id === currentUser.id,
-  } satisfies AppMessage;
+  return mapApiMessageToAppMessage(message, resolvedCurrentUserId);
 }
 
 export async function markConversationAsRead(conversationId: number) {
@@ -1082,11 +1092,15 @@ export async function createStory(payload: {
   file: File;
   mediaType: "image" | "video";
   caption?: string;
+  clientRequestId?: string;
 }) {
   const body = new FormData();
   body.append("media", payload.file);
   body.append("media_type", payload.mediaType);
   body.append("caption", payload.caption || "");
+  if (payload.clientRequestId) {
+    body.append("client_request_id", payload.clientRequestId);
+  }
   const story = await request<ApiStory>("/stories/", {
     method: "POST",
     body,

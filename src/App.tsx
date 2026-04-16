@@ -5,6 +5,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import ProfileCompletionRoute from "@/components/ProfileCompletionRoute";
+import RouteErrorBoundary from "@/components/RouteErrorBoundary";
+import { RealtimeProvider } from "@/contexts/RealtimeContext";
 import { AuthProvider } from "@/lib/auth";
 import Login from "./pages/Login";
 import SignUp from "./pages/SignUp";
@@ -30,11 +32,12 @@ const queryClient = new QueryClient();
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <AuthProvider>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <BrowserRouter>
-          <Routes>
+      <RealtimeProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter>
+            <Routes>
             <Route path="/" element={<Login />} />
             <Route path="/signup" element={<SignUp />} />
             <Route path="/email-verification-sent" element={<EmailVerificationNotice />} />
@@ -47,7 +50,7 @@ const App = () => (
                   <Route index element={<Discover />} />
                   <Route path="messages" element={<Messages />} />
                   <Route path="profile" element={<Profile />} />
-                  <Route path="settings" element={<Settings />} />
+                  <Route path="settings" element={<RouteErrorBoundary title="Configurações"><Settings /></RouteErrorBoundary>} />
                   <Route path="intentions" element={<Intentions />} />
                   <Route path="premium" element={<Premium />} />
                   <Route path="payment" element={<Payment />} />
@@ -59,9 +62,10 @@ const App = () => (
             </Route>
             <Route path="/home" element={<Navigate to="/app" replace />} />
             <Route path="*" element={<NotFound />} />
-          </Routes>
-        </BrowserRouter>
-      </TooltipProvider>
+            </Routes>
+          </BrowserRouter>
+        </TooltipProvider>
+      </RealtimeProvider>
     </AuthProvider>
   </QueryClientProvider>
 );

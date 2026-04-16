@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion, useMotionValue, useTransform, PanInfo } from "framer-motion";
 import { BadgeCheck, Flag, MapPin } from "lucide-react";
+import SpotifyPreviewCard from "@/components/SpotifyPreviewCard";
 import type { AppUserProfile } from "@/lib/types";
 
 interface ProfileCardProps {
@@ -118,6 +119,11 @@ const ProfileCard = ({ profile, onSwipe, isTop, index, onReport }: ProfileCardPr
               </span>
             ))}
           </div>
+          {profile.spotifyTrack ? (
+            <div className="pt-2">
+              <SpotifyPreviewCard track={profile.spotifyTrack} variant="compact" showOpenLink={false} />
+            </div>
+          ) : null}
         </div>
       </div>
     </motion.div>

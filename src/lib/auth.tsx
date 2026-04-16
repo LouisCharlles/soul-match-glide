@@ -12,7 +12,6 @@ import {
   fetchCurrentUser,
   login as loginRequest,
   register as registerRequest,
-  sendPresenceHeartbeat,
 } from "@/lib/api";
 import type { SignUpPayload, UserSummary } from "@/lib/types";
 
@@ -59,39 +58,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  useEffect(() => {
-    if (!user) {
-      return;
-    }
-
-    let heartbeatTimer: number | null = null;
-
-    const sendHeartbeat = () => {
-      if (document.visibilityState !== "visible") {
-        return;
-      }
-      void sendPresenceHeartbeat(true).catch(() => undefined);
-    };
-
-    sendHeartbeat();
-    heartbeatTimer = window.setInterval(sendHeartbeat, 30000);
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        sendHeartbeat();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      if (heartbeatTimer !== null) {
-        window.clearInterval(heartbeatTimer);
-      }
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [user]);
-
   const login = useCallback(async (email: string, password: string) => {
     const nextUser = await loginRequest({ email, password });
     setUser(nextUser);
@@ -113,7 +79,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
-    void sendPresenceHeartbeat(false).catch(() => undefined);
     clearStoredTokens();
     setUser(null);
   }, []);

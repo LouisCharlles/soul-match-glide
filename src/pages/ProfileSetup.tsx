@@ -52,6 +52,7 @@ interface EditablePhoto {
   id?: number;
   previewUrl: string;
   file?: File;
+  clientRequestId?: string | null;
 }
 
 async function fileToDataUrl(file: File) {
@@ -71,6 +72,7 @@ function buildPhotoEntries(profile: AppProfile | null) {
   const entries = profile.photoItems.map<EditablePhoto>((photo) => ({
     id: photo.id,
     previewUrl: photo.url,
+    clientRequestId: photo.clientRequestId ?? null,
   }));
 
   while (entries.length < MIN_PROFILE_PHOTOS) {
@@ -352,7 +354,7 @@ const ProfileSetup = () => {
       setSubmitError("");
       setPhotoEntries((current) => current.map((entry, currentIndex) => (
         currentIndex === index
-          ? { ...entry, previewUrl, file }
+          ? { ...entry, previewUrl, file, clientRequestId: entry.clientRequestId ?? crypto.randomUUID() }
           : entry
       )));
     } catch (error) {
@@ -472,6 +474,7 @@ const ProfileSetup = () => {
             order: index,
             isPrimary: index === 0,
             photoId: entry.id,
+            clientRequestId: entry.clientRequestId ?? undefined,
           });
           if (entry.id) {
             keptPhotoIds.add(entry.id);
