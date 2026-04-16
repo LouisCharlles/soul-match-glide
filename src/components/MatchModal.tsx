@@ -1,11 +1,11 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { Heart } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { UserProfile } from "@/data/mockData";
+import type { AppUserProfile } from "@/lib/types";
 
 interface MatchModalProps {
   isOpen: boolean;
-  matchedUser: UserProfile | null;
+  matchedUser: AppUserProfile | null;
   onClose: () => void;
   onSendMessage: () => void;
 }

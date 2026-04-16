@@ -1,16 +1,17 @@
 import { useState } from "react";
 import { motion, useMotionValue, useTransform, PanInfo } from "framer-motion";
-import { MapPin } from "lucide-react";
-import { UserProfile } from "@/data/mockData";
+import { BadgeCheck, Flag, MapPin } from "lucide-react";
+import type { AppUserProfile } from "@/lib/types";
 
 interface ProfileCardProps {
-  profile: UserProfile;
+  profile: AppUserProfile;
   onSwipe: (direction: "left" | "right") => void;
   isTop: boolean;
   index: number;
+  onReport?: (profile: AppUserProfile) => void;
 }
 
-const ProfileCard = ({ profile, onSwipe, isTop, index }: ProfileCardProps) => {
+const ProfileCard = ({ profile, onSwipe, isTop, index, onReport }: ProfileCardProps) => {
   const [photoIndex, setPhotoIndex] = useState(0);
   const x = useMotionValue(0);
   const rotate = useTransform(x, [-200, 200], [-15, 15]);
@@ -55,7 +56,7 @@ const ProfileCard = ({ profile, onSwipe, isTop, index }: ProfileCardProps) => {
         <div className="relative flex-[3] min-h-0">
           <img
             src={profile.photos[photoIndex]}
-            alt={profile.name}
+            alt={`Foto ${photoIndex + 1} do perfil de ${profile.name}`}
             className="w-full h-full object-cover"
             draggable={false}
           />
@@ -70,6 +71,19 @@ const ProfileCard = ({ profile, onSwipe, isTop, index }: ProfileCardProps) => {
               <div key={i} className={`h-1 rounded-full transition-all ${i === photoIndex ? "w-6 bg-foreground" : "w-4 bg-foreground/40"}`} />
             ))}
           </div>
+          {onReport ? (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onReport(profile);
+              }}
+              className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-full bg-background/75 text-foreground backdrop-blur-sm transition hover:bg-background"
+              aria-label={`Denunciar o perfil de ${profile.name}`}
+            >
+              <Flag className="h-4 w-4" />
+            </button>
+          ) : null}
           {/* Gradient overlay */}
           <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-card to-transparent" />
           {/* Swipe indicators */}
@@ -89,6 +103,7 @@ const ProfileCard = ({ profile, onSwipe, isTop, index }: ProfileCardProps) => {
         <div className="flex-[2] p-4 flex flex-col gap-2">
           <div className="flex items-baseline gap-2">
             <h2 className="font-display text-2xl text-foreground">{profile.name}</h2>
+            {profile.verified ? <BadgeCheck className="h-5 w-5 text-primary" /> : null}
             <span className="text-xl text-muted-foreground font-heading">{profile.age}</span>
           </div>
           <div className="flex items-center gap-1 text-muted-foreground text-sm">

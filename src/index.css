@@ -60,6 +60,10 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
+  }
 }
 
 @layer utilities {
@@ -89,5 +93,17 @@
 
   .card-surface {
     @apply bg-card rounded-lg border border-white/10;
+  }
+
+  .skip-link {
+    @apply sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground;
+  }
+
+  .page-safe-area {
+    padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .chat-safe-area {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
   }
 }
