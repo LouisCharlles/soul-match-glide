@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Globe, Music2, SlidersHorizontal, Sparkles } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
@@ -35,10 +35,25 @@ const Settings = () => {
   const [isSearchingSpotify, setIsSearchingSpotify] = useState(false);
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
 
+  const loadProfile = useCallback(async () => {
+    setIsLoadingProfile(true);
+    try {
+      const nextProfile = await fetchMyProfile();
+      setProfile(nextProfile);
+      setAllowDateSuggestions(nextProfile.allowDateSuggestions);
+      setSelectedTrack(nextProfile.spotifyTrack);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Não foi possível carregar suas preferências.");
+    } finally {
+      setIsLoadingProfile(false);
+    }
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
 
-    const loadProfile = async () => {
+    const safeLoadProfile = async () => {
       try {
         const nextProfile = await fetchMyProfile();
         if (!isMounted) {
@@ -60,7 +75,8 @@ const Settings = () => {
       }
     };
 
-    void loadProfile();
+    setIsLoadingProfile(true);
+    void safeLoadProfile();
 
     return () => {
       isMounted = false;
@@ -102,6 +118,37 @@ const Settings = () => {
       setIsSavingPreferences(false);
     }
   };
+
+  if (isLoadingProfile && !profile) {
+    return (
+      <section className="space-y-4 pb-8">
+        <div>
+          <h1 className="font-display text-3xl text-foreground">{copy.navSettings}</h1>
+          <p className="mt-2 text-sm text-muted-foreground font-body">Carregando suas preferências...</p>
+        </div>
+        <div className="card-surface p-6 text-sm text-muted-foreground">Preparando a tela de configurações.</div>
+      </section>
+    );
+  }
+
+  if (!profile && errorMessage) {
+    return (
+      <section className="space-y-4 pb-8">
+        <div>
+          <h1 className="font-display text-3xl text-foreground">{copy.navSettings}</h1>
+          <p className="mt-2 text-sm text-muted-foreground font-body">Não conseguimos carregar suas configurações agora.</p>
+        </div>
+        <Alert variant="destructive">
+          <AlertTitle>Algo saiu do esperado</AlertTitle>
+          <AlertDescription>{errorMessage}</AlertDescription>
+        </Alert>
+        <div className="flex gap-3">
+          <Button onClick={() => void loadProfile()}>Tentar novamente</Button>
+          <Button variant="outline" onClick={() => navigate(-1)}>Voltar</Button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="space-y-6 pb-8">

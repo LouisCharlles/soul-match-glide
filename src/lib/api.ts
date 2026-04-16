@@ -712,6 +712,14 @@ export async function fetchCurrentUser() {
   return request<UserSummary>("/auth/me/", { auth: true });
 }
 
+export async function sendPresenceHeartbeat(active = true) {
+  return request<{ active: boolean; is_online: boolean; last_seen: string | null }>("/presence/heartbeat/", {
+    method: "POST",
+    body: { active },
+    auth: true,
+  });
+}
+
 export async function fetchMyProfile() {
   const profile = await request<ApiProfile>("/profiles/me/", { auth: true });
   return mapProfileToAppProfile(profile);

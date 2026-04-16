@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
@@ -6,8 +6,10 @@ import {
   BadgeCheck,
   Ban,
   Camera,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Flag,
   ImagePlus,
   MapPinned,
@@ -82,6 +84,8 @@ const Messages = () => {
   const [activeViewOnceMessage, setActiveViewOnceMessage] = useState<AppMessage | null>(null);
   const [dateSuggestions, setDateSuggestions] = useState<DateSuggestion[]>([]);
   const [selectedSuggestion, setSelectedSuggestion] = useState<DateSuggestion | null>(null);
+  const [hasRequestedDateSuggestions, setHasRequestedDateSuggestions] = useState(false);
+  const [isStoriesPanelOpen, setIsStoriesPanelOpen] = useState(true);
   const [reportOpen, setReportOpen] = useState(false);
   const [isLoadingMatches, setIsLoadingMatches] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
@@ -93,6 +97,67 @@ const Messages = () => {
   const galleryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const storyFileInputRef = useRef<HTMLInputElement>(null);
+
+  const refreshSidebarData = useCallback(async (options?: { initial?: boolean }) => {
+    const initial = options?.initial ?? false;
+    if (initial) {
+      setIsLoadingMatches(true);
+    }
+
+    const [nextMatches, nextMatchStories, nextMyStories] = await Promise.all([
+      fetchMatches(),
+      fetchStoriesFeed(),
+      fetchMyStories(),
+    ]);
+
+    setMatches(nextMatches);
+    setMatchStories(nextMatchStories);
+    setMyStories(nextMyStories);
+    setErrorMessage("");
+
+    const selectedChatId = searchParams.get("chat");
+    setSelectedMatch((currentSelected) => {
+      if (selectedChatId) {
+        return nextMatches.find((match) => match.id === selectedChatId) ?? nextMatches[0] ?? null;
+      }
+      if (!currentSelected) {
+        return nextMatches[0] ?? null;
+      }
+      return nextMatches.find((match) => match.id === currentSelected.id) ?? currentSelected;
+    });
+
+    if (initial) {
+      setIsLoadingMatches(false);
+    }
+  }, [searchParams]);
+
+  const refreshConversation = useCallback(async (match: AppMatch, options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+    if (!match.conversationId) {
+      return;
+    }
+
+    if (!silent) {
+      setIsLoadingMessages(true);
+    }
+
+    const nextMessages = await fetchMessages(match.conversationId);
+    setMessages((prev) => ({
+      ...prev,
+      [match.id]: nextMessages,
+    }));
+    setErrorMessage("");
+    await markConversationAsRead(match.conversationId);
+    setMatches((prev) =>
+      prev.map((item) =>
+        item.id === match.id ? { ...item, unread: false } : item,
+      ),
+    );
+
+    if (!silent) {
+      setIsLoadingMessages(false);
+    }
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -107,30 +172,10 @@ const Messages = () => {
 
     const loadMatches = async () => {
       try {
-        const [nextMatches, nextMatchStories, nextMyStories] = await Promise.all([
-          fetchMatches(),
-          fetchStoriesFeed(),
-          fetchMyStories(),
-        ]);
         if (!isMounted) {
           return;
         }
-
-        setMatches(nextMatches);
-        setMatchStories(nextMatchStories);
-        setMyStories(nextMyStories);
-        setErrorMessage("");
-
-        const selectedChatId = searchParams.get("chat");
-        setSelectedMatch((currentSelected) => {
-          if (selectedChatId) {
-            return nextMatches.find((match) => match.id === selectedChatId) ?? nextMatches[0] ?? null;
-          }
-          if (!currentSelected) {
-            return nextMatches[0] ?? null;
-          }
-          return nextMatches.find((match) => match.id === currentSelected.id) ?? currentSelected;
-        });
+        await refreshSidebarData({ initial: true });
       } catch (error) {
         if (!isMounted) {
           return;
@@ -154,7 +199,18 @@ const Messages = () => {
     return () => {
       isMounted = false;
     };
-  }, [searchParams, toast]);
+  }, [refreshSidebarData, toast]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      void refreshSidebarData().catch(() => undefined);
+    }, 15000);
+
+    return () => window.clearInterval(intervalId);
+  }, [refreshSidebarData]);
 
   const filteredMatches = matches.filter((match) =>
     match.user.name.toLowerCase().includes(search.toLowerCase()),
@@ -174,22 +230,10 @@ const Messages = () => {
 
       setIsLoadingMessages(true);
       try {
-        const nextMessages = await fetchMessages(selectedMatch.conversationId);
         if (!isMounted) {
           return;
         }
-
-        setMessages((prev) => ({
-          ...prev,
-          [selectedMatch.id]: nextMessages,
-        }));
-        setErrorMessage("");
-        await markConversationAsRead(selectedMatch.conversationId);
-        setMatches((prev) =>
-          prev.map((match) =>
-            match.id === selectedMatch.id ? { ...match, unread: false } : match,
-          ),
-        );
+        await refreshConversation(selectedMatch);
       } catch (error) {
         if (!isMounted) {
           return;
@@ -213,12 +257,28 @@ const Messages = () => {
     return () => {
       isMounted = false;
     };
-  }, [selectedMatch, toast]);
+  }, [refreshConversation, selectedMatch, toast]);
+
+  useEffect(() => {
+    if (!selectedMatch?.conversationId) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      void refreshConversation(selectedMatch, { silent: true }).catch(() => undefined);
+    }, 4000);
+
+    return () => window.clearInterval(intervalId);
+  }, [refreshConversation, selectedMatch]);
 
   const openChat = (match: AppMatch) => {
     setSelectedMatch(match);
     setDateSuggestions([]);
     setSelectedSuggestion(null);
+    setHasRequestedDateSuggestions(false);
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.set("chat", match.id);
@@ -230,6 +290,7 @@ const Messages = () => {
     setSelectedMatch(null);
     setDateSuggestions([]);
     setSelectedSuggestion(null);
+    setHasRequestedDateSuggestions(false);
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("chat");
@@ -421,6 +482,7 @@ const Messages = () => {
     }
 
     setIsLoadingSuggestions(true);
+    setHasRequestedDateSuggestions(true);
     try {
       await requestLocationPing();
       const suggestions = await fetchDateSuggestions(selectedMatch.id);
@@ -543,6 +605,10 @@ const Messages = () => {
             <p className="mt-1 text-sm text-muted-foreground">Acompanhe as atualizações dos seus matches sem poluir a conversa.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={() => setIsStoriesPanelOpen((current) => !current)}>
+              {isStoriesPanelOpen ? <ChevronUp className="mr-2 h-4 w-4" /> : <ChevronDown className="mr-2 h-4 w-4" />}
+              {isStoriesPanelOpen ? "Recolher stories" : "Abrir stories"}
+            </Button>
             <Button type="button" variant="outline" size="sm" onClick={() => storyFileInputRef.current?.click()}>
               <Camera className="mr-2 h-4 w-4" />
               Publicar story
@@ -565,7 +631,8 @@ const Messages = () => {
           </div>
         </div>
 
-        <div className="mt-4 flex gap-3 overflow-x-auto pb-1">
+        {isStoriesPanelOpen ? (
+          <div className="mt-4 flex gap-3 overflow-x-auto pb-1">
           {groupedStories.map((group) => {
             const previewStory = group.items[group.items.length - 1];
             return (
@@ -605,7 +672,8 @@ const Messages = () => {
               Nenhum story ativo por enquanto.
             </div>
           ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="flex min-h-0 flex-1 gap-4">
@@ -766,6 +834,12 @@ const Messages = () => {
                   </div>
                 ) : null}
 
+                {hasRequestedDateSuggestions && !isLoadingSuggestions && dateSuggestions.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-white/10 bg-background/25 p-4 text-sm text-muted-foreground">
+                    Nenhum lugar disponível foi encontrado no meio do caminho entre vocês agora.
+                  </div>
+                ) : null}
+
                 {isLoadingMessages ? (
                   <div className="text-sm font-body text-muted-foreground">Carregando mensagens...</div>
                 ) : null}
@@ -875,7 +949,7 @@ const Messages = () => {
                           <p className="text-xs text-muted-foreground">
                             {pendingAttachment.source === "camera" ? "Capturada pela câmera" : "Selecionada da galeria"}
                           </p>
-                          {pendingAttachment.type === "image" ? (
+                          {pendingAttachment.type === "image" || pendingAttachment.type === "video" ? (
                             <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                               <input
                                 type="checkbox"
@@ -909,7 +983,7 @@ const Messages = () => {
                   <input
                     ref={cameraInputRef}
                     type="file"
-                    accept="image/*"
+                    accept="image/*,video/*"
                     capture="environment"
                     className="hidden"
                     onChange={(event) => handleAttachmentSelection(event.target.files?.[0] ?? null, "camera")}
