@@ -81,6 +81,11 @@ interface ActiveStoryState {
   storyIndex: number;
 }
 
+interface MessageRealtimeEvent {
+  type: "message.created" | "message.updated" | "message.read";
+  data?: unknown;
+}
+
 function mergeMessageList(currentMessages: AppMessage[], nextMessage: AppMessage) {
   const filteredMessages = currentMessages.filter((message) => {
     if (message.id === nextMessage.id) {
@@ -100,6 +105,23 @@ function upsertStoryCollection(currentStories: AppStory[], nextStory: AppStory) 
     story.id !== nextStory.id
     && (!nextStory.clientRequestId || story.clientRequestId !== nextStory.clientRequestId)
   ))];
+}
+
+function getMatchOnlineStatus(match: AppMatch, presenceByUserId: Record<number, boolean>) {
+  return presenceByUserId[match.user.userId] ?? match.user.online;
+}
+
+function getMessagePreviewText(message: AppMessage) {
+  if (message.text) {
+    return message.text;
+  }
+  if (message.type === "video") {
+    return "Vídeo";
+  }
+  if (message.type === "image") {
+    return "Foto";
+  }
+  return "Nova mensagem";
 }
 
 const Messages = () => {
@@ -292,9 +314,13 @@ const Messages = () => {
       ...match,
       user: {
         ...match.user,
-        online: presenceByUserId[match.user.userId] ?? match.user.online,
+        online: getMatchOnlineStatus(match, presenceByUserId),
       },
     }));
+
+  const selectedMatchOnline = selectedMatch
+    ? getMatchOnlineStatus(selectedMatch, presenceByUserId)
+    : false;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -369,7 +395,7 @@ const Messages = () => {
   }, [subscribeToStoryEvents, user?.id]);
 
   useEffect(() => {
-    if (!selectedMatch?.conversationId || !user) {
+    if (!selectedMatch?.conversationId || !user?.id) {
       return;
     }
 
@@ -393,10 +419,10 @@ const Messages = () => {
 
     socket.onmessage = (event) => {
       try {
-        const payload = JSON.parse(event.data);
+        const payload = JSON.parse(event.data) as MessageRealtimeEvent;
 
         if (payload.type === "message.created" || payload.type === "message.updated") {
-          const nextMessage = mapApiMessageToAppMessage(payload.data, user.id);
+          const nextMessage = mapApiMessageToAppMessage(payload.data as never, user.id);
           setMessages((prev) => {
             const currentMessages = prev[currentMatchId] || [];
             return {
@@ -409,7 +435,7 @@ const Messages = () => {
               match.id === currentMatchId
                 ? {
                     ...match,
-                    lastMessage: nextMessage.text || (nextMessage.type === "video" ? "Vídeo" : nextMessage.type === "image" ? "Foto" : "Nova mensagem"),
+                    lastMessage: getMessagePreviewText(nextMessage),
                     timestamp: "agora",
                     unread: !nextMessage.isMine,
                   }
@@ -424,20 +450,37 @@ const Messages = () => {
             void refreshConversation(currentMatch, { silent: true, markRead: false });
           }
         }
-      } catch {
-        // ignore malformed websocket payloads
+      } catch (error) {
+        debugMessages("erro ao processar evento realtime da conversa", {
+          matchId: currentMatchId,
+          conversationId: currentConversationId,
+          error: error instanceof Error ? error.message : "unknown",
+        });
       }
     };
 
     socket.onopen = () => {
+      debugMessages("websocket da conversa conectado", {
+        matchId: currentMatchId,
+        conversationId: currentConversationId,
+      });
       socket.send(JSON.stringify({ type: "ping" }));
+    };
+
+    socket.onclose = (event) => {
+      debugMessages("websocket da conversa desconectado", {
+        matchId: currentMatchId,
+        conversationId: currentConversationId,
+        code: event.code,
+        reason: event.reason,
+      });
     };
 
     return () => {
       window.clearInterval(pingTimer);
       socket.close();
     };
-  }, [refreshConversation, selectedMatch?.conversationId, selectedMatch?.id, user]);
+  }, [refreshConversation, selectedMatch?.conversationId, selectedMatch?.id, user?.id]);
 
   const openChat = (match: AppMatch) => {
     setSelectedMatch(match);
@@ -520,7 +563,7 @@ const Messages = () => {
           match.id === selectedMatch.id
             ? {
                 ...match,
-                lastMessage: sentMessage.text || (sentMessage.type === "video" ? "Vídeo" : sentMessage.type === "image" ? "Foto" : "Nova mensagem"),
+                lastMessage: getMessagePreviewText(sentMessage),
                 timestamp: "agora",
               }
             : match,
@@ -919,7 +962,9 @@ const Messages = () => {
                     <p className="truncate text-sm font-heading text-foreground">{selectedMatch.user.name}</p>
                     {selectedMatch.user.verified ? <BadgeCheck className="h-4 w-4 text-primary" /> : null}
                   </div>
-                  <p className="text-xs font-body text-success">{selectedMatch.user.online ? "Online" : "Offline"}</p>
+                  <p className={`text-xs font-body ${selectedMatchOnline ? "text-success" : "text-muted-foreground"}`}>
+                    {selectedMatchOnline ? "Online" : "Offline"}
+                  </p>
                 </div>
                 <div className="ml-auto flex items-center gap-2">
                   <Button type="button" variant="outline" size="sm" onClick={() => void handleSuggestDate()} disabled={isLoadingSuggestions}>
