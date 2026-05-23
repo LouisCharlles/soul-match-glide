@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import { AlertCircle, ArrowLeft, Briefcase, GraduationCap, Heart, MapPin, Plus, Sparkles, Trash2, Upload, UserRound } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -86,6 +87,7 @@ const ProfileSetup = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [form, setForm] = useState<ProfileFormValues>(emptyProfileFormValues);
   const [profile, setProfile] = useState<AppProfile | null>(null);
   const [interestInput, setInterestInput] = useState("");
@@ -101,55 +103,35 @@ const ProfileSetup = () => {
   const [submitError, setSubmitError] = useState("");
   const [isRemovingPhotoIndex, setIsRemovingPhotoIndex] = useState<number | null>(null);
 
+  const { data: profileQueryData, isLoading: isProfileQueryLoading } = useQuery({
+    queryKey: ["profile", "me"],
+    queryFn: fetchMyProfileOptional,
+    staleTime: 300_000,
+  });
+
   useEffect(() => {
-    let isMounted = true;
+    if (isProfileQueryLoading) return;
+    const loadedProfile = profileQueryData ?? null;
+    if (loadedProfile) {
+      setProfile(loadedProfile);
+      setForm(profileToFormValues(loadedProfile));
+      setPhotoEntries(buildPhotoEntries(loadedProfile));
+      setHasExistingProfile(true);
+      setSubmitError("");
+    } else {
+      setProfile(null);
+      setForm(emptyProfileFormValues());
+      setPhotoEntries(buildPhotoEntries(null));
+      setHasExistingProfile(false);
+    }
+    setIsLoading(false);
+  }, [profileQueryData, isProfileQueryLoading]);
 
-    const loadProfile = async () => {
-      try {
-        const [loadedProfile, loadedInterests] = await Promise.all([
-          fetchMyProfileOptional(),
-          fetchInterestOptions(),
-        ]);
-
-        if (!isMounted) {
-          return;
-        }
-
-        setInterestOptions(loadedInterests);
-
-        if (loadedProfile) {
-          setProfile(loadedProfile);
-          setForm(profileToFormValues(loadedProfile));
-          setPhotoEntries(buildPhotoEntries(loadedProfile));
-          setHasExistingProfile(true);
-          setSubmitError("");
-        } else {
-          setProfile(null);
-          setForm(emptyProfileFormValues());
-          setPhotoEntries(buildPhotoEntries(null));
-          setHasExistingProfile(false);
-        }
-      } catch (error) {
-        if (isMounted) {
-          toast({
-            title: "Não foi possível carregar os dados do perfil",
-            description: error instanceof Error ? error.message : "Tente novamente.",
-            variant: "destructive",
-          });
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    void loadProfile();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [toast]);
+  useEffect(() => {
+    fetchInterestOptions()
+      .then(setInterestOptions)
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -494,6 +476,7 @@ const ProfileSetup = () => {
       }
 
       const refreshedProfile = await fetchMyProfile();
+      void queryClient.invalidateQueries({ queryKey: ["profile", "me"] });
 
       toast({
         title: hasExistingProfile ? "Perfil atualizado" : "Perfil criado com sucesso",
@@ -894,14 +877,6 @@ const ProfileSetup = () => {
                 <p className="text-xs text-muted-foreground font-body">Usa sua localização para sugerir lugares de encontro.</p>
               </div>
               <Switch checked={form.allowDateSuggestions} onCheckedChange={(value) => setField("allowDateSuggestions", value)} />
-            </div>
-
-            <div className="flex items-center justify-between rounded-xl border border-white/10 px-4 py-3">
-              <div>
-                <p className="font-body-bold text-sm text-foreground">Match de estudo</p>
-                <p className="text-xs text-muted-foreground font-body">Permite conexões baseadas em interesses acadêmicos.</p>
-              </div>
-              <Switch checked={form.allowStudyMatch} onCheckedChange={(value) => setField("allowStudyMatch", value)} />
             </div>
 
             <div className="flex items-center justify-between rounded-xl border border-white/10 px-4 py-3">

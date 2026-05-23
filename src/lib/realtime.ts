@@ -1,4 +1,4 @@
-import { getApiBaseUrl, getStoredAccessToken } from "@/lib/api";
+import { getApiBaseUrl } from "@/lib/api";
 
 function toWebSocketBaseUrl(httpBaseUrl: string) {
   if (httpBaseUrl.startsWith("https://")) {
@@ -11,13 +11,7 @@ function toWebSocketBaseUrl(httpBaseUrl: string) {
 }
 
 export function buildWebSocketUrl(path: string) {
-  const token = getStoredAccessToken();
-  if (!token) {
-    return null;
-  }
-
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   const baseUrl = toWebSocketBaseUrl(getApiBaseUrl());
-  const separator = normalizedPath.includes("?") ? "&" : "?";
-  return `${baseUrl}${normalizedPath}${separator}token=${encodeURIComponent(token)}`;
+  return `${baseUrl}${normalizedPath}`;
 }

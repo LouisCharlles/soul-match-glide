@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, BadgeCheck, MapPin, Briefcase, GraduationCap, Heart, Music2, Users, TrendingUp, Settings, Edit, LogOut, Palette, Plus, Camera } from "lucide-react";
+import { AlertCircle, BadgeCheck, MapPin, Briefcase, GraduationCap, Heart, Music2, Users, TrendingUp, Settings, Edit, LogOut, Palette, Plus, Camera, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import SpotifyPreviewCard from "@/components/SpotifyPreviewCard";
 import { useToast } from "@/hooks/use-toast";
 import { useAppExperience } from "@/contexts/AppExperienceContext";
+import { getContrastTextColor, hexToRgba } from "@/lib/colors";
 import { createVerificationAttempt, fetchMyProfile, fetchVerificationAttempts } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useCamera } from "@/hooks/useCamera";
+import { getFriendlyVerificationError } from "@/lib/verificationErrors";
 import type { AppProfile, AppVerificationAttempt } from "@/lib/types";
 
 const Profile = () => {
@@ -20,6 +23,7 @@ const Profile = () => {
   const [errorMessage, setErrorMessage] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [verificationSummary, setVerificationSummary] = useState<AppVerificationAttempt | null>(null);
+  const camera = useCamera();
 
   useEffect(() => {
     let isMounted = true;
@@ -59,6 +63,13 @@ const Profile = () => {
     };
   }, [toast]);
 
+  useEffect(() => {
+    if (camera.state === "active" && camera.videoRef.current && camera.stream) {
+      camera.videoRef.current.srcObject = camera.stream;
+      camera.videoRef.current.play().catch(console.error);
+    }
+  }, [camera.state, camera.videoRef, camera.stream]);
+
   if (isLoading) {
     return (
       <div className="flex h-[calc(100vh-10rem)] items-center justify-center text-sm font-body text-muted-foreground">
@@ -80,6 +91,7 @@ const Profile = () => {
     { icon: Users, label: "Matches", value: String(profile.stats.matches), color: "text-success" },
     { icon: TrendingUp, label: "Conversas", value: String(profile.stats.conversations), color: "text-warning" },
   ];
+  const accentTextColor = getContrastTextColor(profile.accentColor);
 
   const photos = [...profile.photos, ...Array(Math.max(0, 6 - profile.photos.length)).fill(null)];
 
@@ -119,7 +131,7 @@ const Profile = () => {
       </div>
 
       {/* Info */}
-      <div className="card-surface p-5 space-y-4" style={{ borderColor: `${customization.accentColor}55` }}>
+      <div className="card-surface p-5 space-y-4" style={{ borderColor: hexToRgba(profile.accentColor, 0.35) }}>
         <div className="flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -169,40 +181,90 @@ const Profile = () => {
           </div>
           {profile.verified ? <BadgeCheck className="h-5 w-5 text-primary" /> : null}
         </div>
-        <label className="inline-flex cursor-pointer items-center gap-3 rounded-full border border-white/10 px-4 py-2 text-sm text-foreground hover:bg-accent/40">
-          <input
-            type="file"
-            accept="image/*"
-            capture="user"
-            className="sr-only"
-            onChange={async (event) => {
-              const file = event.target.files?.[0];
-              if (!file) {
-                return;
-              }
-              setIsVerifying(true);
-              try {
-                await createVerificationAttempt(file);
-                const attempts = await fetchVerificationAttempts();
-                setVerificationSummary(attempts[0] ?? null);
-                toast({
-                  title: "Selfie enviada",
-                  description: "A verificação foi processada e o status já foi atualizado.",
-                });
-              } catch (error) {
-                toast({
-                  title: "Não foi possível enviar a selfie",
-                  description: error instanceof Error ? error.message : "Tente novamente.",
-                  variant: "destructive",
-                });
-              } finally {
-                setIsVerifying(false);
-                event.currentTarget.value = "";
-              }
-            }}
-          />
-          {isVerifying ? "Enviando..." : profile.verified ? "Reenviar selfie" : "Verificar perfil"}
-        </label>
+        {camera.hasCamera === false ? (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              É necessário utilizar um dispositivo com câmera para prosseguir com a verificação.
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <div className="space-y-3">
+            {camera.state === "active" && (
+              <div className="space-y-2">
+                {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                <video
+                  ref={camera.videoRef}
+                  className="w-full max-w-xs rounded-2xl border border-white/10 bg-background"
+                  autoPlay
+                  playsInline
+                  muted
+                  aria-label="Prévia da câmera"
+                />
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    const file = camera.capturePhoto();
+                    if (!file) return;
+                    setIsVerifying(true);
+                    createVerificationAttempt(file)
+                      .then(() => fetchVerificationAttempts())
+                      .then((attempts) => {
+                        setVerificationSummary(attempts[0] ?? null);
+                        toast({ title: "Selfie enviada", description: "Verificação processada com sucesso." });
+                      })
+                      .catch((error) => {
+                        const raw = error instanceof Error ? error.message : "";
+                        toast({
+                          title: "Não foi possível enviar a selfie",
+                          description: getFriendlyVerificationError(raw),
+                          variant: "destructive",
+                        });
+                      })
+                      .finally(() => setIsVerifying(false));
+                  }}
+                  disabled={isVerifying}
+                >
+                  <Camera className="mr-2 h-4 w-4" />
+                  {isVerifying ? "Enviando..." : "Tirar foto"}
+                </Button>
+              </div>
+            )}
+
+            {camera.state === "captured" && camera.previewUrl && (
+              <div className="space-y-2">
+                <img
+                  src={camera.previewUrl}
+                  alt="Prévia da selfie capturada"
+                  className="w-full max-w-xs rounded-2xl border border-white/10"
+                />
+                <Button size="sm" variant="outline" onClick={camera.retake}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Tirar outra foto
+                </Button>
+              </div>
+            )}
+
+            {camera.errorMessage && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{camera.errorMessage}</AlertDescription>
+              </Alert>
+            )}
+
+            {camera.state === "idle" || camera.state === "error" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void camera.startCamera()}
+                disabled={camera.hasCamera === null}
+              >
+                <Camera className="mr-2 h-4 w-4" />
+                {profile.verified ? "Reenviar selfie" : "Verificar perfil"}
+              </Button>
+            ) : null}
+          </div>
+        )}
         {verificationSummary ? (
           <div className="rounded-2xl border border-white/10 bg-background/40 p-4 text-sm">
             <p className="font-body-bold text-foreground">Status atual: {verificationSummary.status}</p>
@@ -212,7 +274,9 @@ const Profile = () => {
               </p>
             ) : null}
             {verificationSummary.rejectionReason ? (
-              <p className="mt-1 text-muted-foreground">{verificationSummary.rejectionReason}</p>
+              <p className="mt-1 text-muted-foreground text-warning">
+                {getFriendlyVerificationError(verificationSummary.rejectionReason)}
+              </p>
             ) : null}
           </div>
         ) : null}
@@ -220,16 +284,24 @@ const Profile = () => {
 
       <div className="card-surface p-5 space-y-4">
         <div className="flex items-center gap-2">
-          <Palette className="h-4 w-4" style={{ color: customization.accentColor }} />
+          <Palette className="h-4 w-4" style={{ color: profile.accentColor }} />
           <h2 className="font-heading text-lg text-foreground">Personalização</h2>
         </div>
 
-        <div className="flex items-center justify-between rounded-xl border border-white/10 px-4 py-3">
+        <div
+          className="flex items-center justify-between rounded-xl border border-white/10 px-4 py-3"
+          style={{ backgroundColor: hexToRgba(profile.accentColor, 0.14) }}
+        >
           <div>
             <p className="font-body-bold text-sm text-foreground">Cor do perfil</p>
-            <p className="text-xs text-muted-foreground font-body">{customization.accentColor}</p>
+            <p className="text-xs text-muted-foreground font-body">{profile.accentColor}</p>
           </div>
-          <div className="h-8 w-8 rounded-full border border-white/10" style={{ backgroundColor: customization.accentColor }} />
+          <div className="flex items-center gap-3">
+            <div className="rounded-full px-3 py-1 text-xs font-body-bold" style={{ backgroundColor: profile.accentColor, color: accentTextColor }}>
+              Sua cor
+            </div>
+            <div className="h-8 w-8 rounded-full border border-white/10" style={{ backgroundColor: profile.accentColor }} />
+          </div>
         </div>
 
         <div className="flex items-center justify-between rounded-xl border border-white/10 px-4 py-3">
@@ -241,7 +313,7 @@ const Profile = () => {
         </div>
 
         {profile.spotifyTrack ? (
-          <SpotifyPreviewCard track={profile.spotifyTrack} />
+          <SpotifyPreviewCard track={profile.spotifyTrack} variant="embed" />
         ) : null}
       </div>
 

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import SpotifyPreviewCard from "@/components/SpotifyPreviewCard";
 import { useAppExperience } from "@/contexts/AppExperienceContext";
 import { fetchMyProfile, searchSpotifyTracks, updateMyProfileSettings } from "@/lib/api";
+import { normalizeAccentColor } from "@/lib/colors";
 import { getCopy } from "@/lib/copy";
 import type { AppProfile, AppSpotifyTrack } from "@/lib/types";
 
@@ -23,7 +24,6 @@ const Settings = () => {
     setLanguage,
     setDiscoveryAgeRange,
     setDiscoveryGender,
-    setCustomization,
   } = useAppExperience();
   const copy = getCopy(language);
   const [profile, setProfile] = useState<AppProfile | null>(null);
@@ -31,6 +31,7 @@ const Settings = () => {
   const [spotifyQuery, setSpotifyQuery] = useState("");
   const [spotifyResults, setSpotifyResults] = useState<AppSpotifyTrack[]>([]);
   const [selectedTrack, setSelectedTrack] = useState<AppSpotifyTrack | null>(null);
+  const [accentColor, setAccentColor] = useState("#D71D29");
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const [isSearchingSpotify, setIsSearchingSpotify] = useState(false);
@@ -58,6 +59,7 @@ const Settings = () => {
       setProfile(nextProfile);
       setAllowDateSuggestions(nextProfile.allowDateSuggestions);
       setSelectedTrack(nextProfile.spotifyTrack);
+      setAccentColor(nextProfile.accentColor);
       setErrorMessage("");
     } catch (error) {
       if (latestLoadIdRef.current !== loadId) {
@@ -98,9 +100,11 @@ const Settings = () => {
       const nextProfile = await updateMyProfileSettings({
         allowDateSuggestions,
         spotifyTrack: selectedTrack,
+        accentColor,
       });
       setProfile(nextProfile);
       setSelectedTrack(nextProfile.spotifyTrack);
+      setAccentColor(nextProfile.accentColor);
       setSpotifyQuery("");
       setSpotifyResults([]);
       setErrorMessage("");
@@ -221,6 +225,24 @@ const Settings = () => {
           <h2 className="font-heading text-lg text-foreground">Preferências do perfil</h2>
         </div>
 
+        <div className="space-y-2 rounded-2xl border border-white/10 p-4">
+          <Label htmlFor="accent-color" className="font-body-bold text-sm">Cor do perfil e das conversas</Label>
+          <div className="flex items-center gap-3">
+            <input
+              id="accent-color"
+              type="color"
+              value={accentColor}
+              onChange={(event) => setAccentColor(normalizeAccentColor(event.target.value))}
+              className="h-12 w-16 cursor-pointer rounded-md border border-white/10 bg-card"
+            />
+            <span className="text-sm text-muted-foreground font-body">{accentColor}</span>
+            <div className="h-8 w-8 rounded-full border border-white/10" style={{ backgroundColor: accentColor }} />
+          </div>
+          <p className="text-xs text-muted-foreground font-body">
+            Essa cor será usada no seu perfil e nas suas mensagens para todos os usuários.
+          </p>
+        </div>
+
         <div className="flex items-center justify-between rounded-xl border border-white/10 px-4 py-3">
           <div>
             <p className="font-body-bold text-sm text-foreground">Sugerir date</p>
@@ -253,7 +275,7 @@ const Settings = () => {
 
           {selectedTrack ? (
             <div className="space-y-3">
-              <SpotifyPreviewCard track={selectedTrack} />
+              <SpotifyPreviewCard track={selectedTrack} variant="embed" />
               <div className="flex justify-end">
                 <Button variant="ghost" onClick={() => setSelectedTrack(null)}>
                   Remover
@@ -305,20 +327,6 @@ const Settings = () => {
           <h2 className="font-heading text-lg text-foreground">Personalização local</h2>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="accent-color" className="font-body-bold text-sm">Cor do perfil</Label>
-          <div className="flex items-center gap-3">
-            <input
-              id="accent-color"
-              type="color"
-              value={customization.accentColor}
-              onChange={(event) => setCustomization({ accentColor: event.target.value })}
-              className="h-12 w-16 cursor-pointer rounded-md border border-white/10 bg-card"
-            />
-            <span className="text-sm text-muted-foreground font-body">{customization.accentColor}</span>
-          </div>
-        </div>
-
         <div className="flex items-center justify-between rounded-xl border border-white/10 px-4 py-3">
           <div>
             <p className="font-body-bold text-sm text-foreground">Permitir GIFs no carrossel</p>
@@ -336,7 +344,7 @@ const Settings = () => {
             Prévia da customização
           </div>
           <p className="mt-2">
-            Cor e GIFs continuam salvos localmente no app. Música e sugestões de date já são persistidas no perfil real.
+            GIFs continuam salvos localmente no app. Cor, música e sugestões de date já são persistidas no perfil real.
           </p>
         </div>
       </div>

@@ -72,7 +72,6 @@ export function profileToFormValues(profile: AppProfile): ProfileFormValues {
     showAge: profile.showAge,
     allowVideoCalls: profile.allowVideoCalls,
     allowDateSuggestions: profile.allowDateSuggestions,
-    allowStudyMatch: profile.allowStudyMatch,
     invisibleMode: profile.invisibleMode,
   };
 }
@@ -95,7 +94,6 @@ export function emptyProfileFormValues(): ProfileFormValues {
     showAge: true,
     allowVideoCalls: true,
     allowDateSuggestions: false,
-    allowStudyMatch: true,
     invisibleMode: false,
   };
 }

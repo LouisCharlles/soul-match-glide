@@ -54,6 +54,12 @@ export default {
         },
         success: "hsl(var(--success))",
         warning: "hsl(var(--warning))",
+        /* ── Night Campus Social ── */
+        coral: "#F2633A",
+        peach: "#FFB385",
+        "neon-pink": "#EC3A92",
+        "electric-blue": "#3B9DF2",
+        lavender: "#A78BFA",
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",
@@ -85,11 +91,34 @@ export default {
           "80%": { opacity: "1" },
           "100%": { transform: "translateY(-200px) scale(0.5)", opacity: "0" },
         },
+        "like-pulse": {
+          "0%": { transform: "scale(1)" },
+          "30%": { transform: "scale(1.35)" },
+          "60%": { transform: "scale(0.92)" },
+          "80%": { transform: "scale(1.12)" },
+          "100%": { transform: "scale(1)" },
+        },
+        "slide-up": {
+          "0%": { transform: "translateY(16px)", opacity: "0" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
+        },
+        "glow-pulse": {
+          "0%, 100%": { boxShadow: "0 0 12px rgba(236, 58, 146, 0.35)" },
+          "50%": { boxShadow: "0 0 36px rgba(236, 58, 146, 0.75)" },
+        },
+        "fade-in": {
+          "0%": { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
         "float-up": "float-up 2s ease-out forwards",
+        "like-pulse": "like-pulse 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)",
+        "slide-up": "slide-up 0.35s ease-out forwards",
+        "glow-pulse": "glow-pulse 2.5s ease-in-out infinite",
+        "fade-in": "fade-in 0.25s ease-out forwards",
       },
     },
   },

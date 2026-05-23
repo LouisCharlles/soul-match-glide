@@ -40,7 +40,7 @@ export function CurrencyDisplay() {
         )}
       </button>
 
-      {/* Watch Videos - Only show if not maxed */}
+      {/* HIDDEN: botão de vídeos premiados — reativar após configurar Ad Manager
       {remainingVideos > 0 && !isPremium && (
         <button
           onClick={() => navigate('/app/watch-videos')}
@@ -50,6 +50,7 @@ export function CurrencyDisplay() {
           <span className="text-xs font-bold text-green-500">{remainingVideos}</span>
         </button>
       )}
+      */}
 
       {/* Premium Badge */}
       {isPremium && (

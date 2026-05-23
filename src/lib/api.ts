@@ -22,6 +22,7 @@ import type {
   SignUpPayload,
   UserSummary,
 } from "@/lib/types";
+import { DEFAULT_ACCENT_COLOR, normalizeAccentColor } from "@/lib/colors";
 
 type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 
@@ -33,12 +34,8 @@ interface RequestOptions {
   retryOnAuthError?: boolean;
 }
 
-interface AuthTokens {
+interface TokenResponse {
   access: string;
-  refresh: string;
-}
-
-interface TokenResponse extends AuthTokens {
   user: UserSummary;
 }
 
@@ -67,11 +64,13 @@ interface ApiStoryReaction {
   id: number;
   emoji: string;
   user: UserSummary;
+  user_display_name?: string | null;
 }
 
 interface ApiStory {
   id: number;
   author: UserSummary;
+  author_display_name?: string | null;
   media_type: "image" | "video";
   media: string | null;
   media_url: string | null;
@@ -96,8 +95,8 @@ interface ApiProfileWritePayload {
   show_age: boolean;
   allow_video_calls: boolean;
   allow_date_suggestions: boolean;
-  allow_study_match: boolean;
   is_invisible_mode: boolean;
+  accent_color?: string;
   location_id?: number;
   interest_ids: number[];
 }
@@ -118,7 +117,6 @@ interface ApiProfile {
   show_age: boolean;
   allow_video_calls: boolean;
   allow_date_suggestions: boolean;
-  allow_study_match: boolean;
   is_invisible_mode: boolean;
   relationship_intent: string;
   spotify_track?: {
@@ -135,7 +133,9 @@ interface ApiProfile {
   spotify_track_url?: string;
   spotify_album_image_url?: string;
   spotify_preview_url?: string;
+  accent_color?: string | null;
   is_verified: boolean;
+  premium_tier?: string;
   interests: ApiInterest[];
   photos: ApiPhoto[];
   stats?: ProfileStats;
@@ -173,10 +173,19 @@ interface ApiMessage {
   id: number;
   sender: UserSummary;
   content: string;
-  message_type: "text" | "image" | "video" | "story_reply";
+  message_type: "text" | "image" | "video" | "story_reply" | "date_suggestion";
+  provider_payload?: Record<string, unknown> | null;
   media_url?: string | null;
   client_request_id?: string | null;
   story?: number | null;
+  story_context?: {
+    id: number;
+    author: UserSummary;
+    author_display_name?: string | null;
+    media_type: "image" | "video";
+    media_url?: string | null;
+    caption: string;
+  } | null;
   reply_to_message?: number | null;
   is_view_once?: boolean;
   consumed_at?: string | null;
@@ -262,8 +271,7 @@ const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL?.trim() || "http://127.0.0.1:8000"
 ).replace(/\/+$/, "");
 
-const ACCESS_TOKEN_KEY = "bonding_access_token";
-const REFRESH_TOKEN_KEY = "bonding_refresh_token";
+let accessToken: string | null = null;
 
 export class ApiError extends Error {
   status: number;
@@ -279,29 +287,24 @@ function isApiError(error: unknown): error is ApiError {
   return error instanceof ApiError;
 }
 
-function getStoredTokens(): AuthTokens | null {
-  const access = window.localStorage.getItem(ACCESS_TOKEN_KEY);
-  const refresh = window.localStorage.getItem(REFRESH_TOKEN_KEY);
-
-  if (!access || !refresh) {
-    return null;
-  }
-
-  return { access, refresh };
-}
-
 export function getStoredAccessToken() {
-  return getStoredTokens()?.access || null;
+  return accessToken;
 }
 
-export function storeTokens(tokens: AuthTokens) {
-  window.localStorage.setItem(ACCESS_TOKEN_KEY, tokens.access);
-  window.localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh);
+export function storeAccessToken(token: string | null) {
+  accessToken = token;
 }
 
-export function clearStoredTokens() {
-  window.localStorage.removeItem(ACCESS_TOKEN_KEY);
-  window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+export async function clearStoredTokens() {
+  accessToken = null;
+  await fetch(`${API_BASE_URL}/api/token/logout/`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "ngrok-skip-browser-warning": "true",
+    },
+  }).catch(() => null);
 }
 
 function buildHeaders(body?: RequestOptions["body"], headers?: Record<string, string>) {
@@ -348,28 +351,24 @@ function getErrorMessage(payload: unknown, fallback: string) {
 }
 
 async function refreshAccessToken() {
-  const tokens = getStoredTokens();
-  if (!tokens?.refresh) {
-    clearStoredTokens();
-    throw new ApiError("Sua sessão expirou. Faça login novamente.", 401);
-  }
-
   const response = await fetch(`${API_BASE_URL}/api/token/refresh/`, {
     method: "POST",
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
+      "ngrok-skip-browser-warning": "true",
     },
-    body: JSON.stringify({ refresh: tokens.refresh }),
+    body: JSON.stringify({}),
   });
 
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload?.access) {
-    clearStoredTokens();
+    await clearStoredTokens();
     throw new ApiError("Sua sessão expirou. Faça login novamente.", response.status);
   }
 
-  storeTokens({ access: payload.access, refresh: tokens.refresh });
+  storeAccessToken(payload.access as string);
   return payload.access as string;
 }
 
@@ -384,15 +383,21 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   const finalHeaders = buildHeaders(body, headers);
   if (auth) {
-    const tokens = getStoredTokens();
-    if (!tokens?.access) {
-      throw new ApiError("Faça login para continuar.", 401);
+    if (!accessToken) {
+      try {
+        accessToken = await refreshAccessToken();
+      } catch (error) {
+        throw error instanceof ApiError
+          ? error
+          : new ApiError("Faça login para continuar.", 401);
+      }
     }
-    finalHeaders.Authorization = `Bearer ${tokens.access}`;
+    finalHeaders.Authorization = `Bearer ${accessToken}`;
   }
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method,
+    credentials: "include",
     headers: finalHeaders,
     body:
       body && !(body instanceof FormData)
@@ -502,6 +507,7 @@ function mapProfileToCard(profile: ApiProfile): AppUserProfile {
     interests: profile.interests.map((interest) => interest.name),
     photos: photoItems.length > 0 ? photoItems.map((photo) => photo.url) : ["/placeholder.svg"],
     online: profile.is_online,
+    accentColor: normalizeAccentColor(profile.accent_color ?? DEFAULT_ACCENT_COLOR),
     verified: profile.is_verified,
     relationshipIntent: profile.relationship_intent,
     spotifyTrack: profile.spotify_track ? {
@@ -542,6 +548,7 @@ function mapProfileToAppProfile(profile: ApiProfile): AppProfile {
   return {
     ...mapProfileToCard(profile),
     uuid: profile.uuid,
+    premiumTier: profile.premium_tier ?? "free",
     course: profile.course || "",
     locationCity: profile.location?.city || "",
     locationState: profile.location?.state || "",
@@ -550,7 +557,6 @@ function mapProfileToAppProfile(profile: ApiProfile): AppProfile {
     showAge: profile.show_age,
     allowVideoCalls: profile.allow_video_calls,
     allowDateSuggestions: profile.allow_date_suggestions,
-    allowStudyMatch: profile.allow_study_match,
     invisibleMode: profile.is_invisible_mode,
     relationshipIntent: profile.relationship_intent,
     spotifyTrack: profile.spotify_track ? {
@@ -572,11 +578,12 @@ function mapProfileToAppProfile(profile: ApiProfile): AppProfile {
 }
 
 export function mapApiStory(story: ApiStory): AppStory {
+  const authorLabel = (story.author_display_name ?? "").trim() || story.author.email;
   return {
     id: story.id,
     clientRequestId: story.client_request_id ?? null,
     authorId: story.author.id,
-    authorName: story.author.email,
+    authorName: authorLabel,
     mediaType: story.media_type,
     mediaUrl: resolveMediaUrl(story.media_url || story.media || ""),
     caption: story.caption,
@@ -586,7 +593,7 @@ export function mapApiStory(story: ApiStory): AppStory {
     reactions: story.reactions.map((reaction) => ({
       id: reaction.id,
       emoji: reaction.emoji,
-      userName: reaction.user.email,
+      userName: (reaction.user_display_name ?? "").trim() || reaction.user.email,
     })),
   };
 }
@@ -602,7 +609,16 @@ export function mapApiMessageToAppMessage(message: ApiMessage, currentUserId: nu
     isViewOnce: Boolean(message.is_view_once),
     consumedAt: message.consumed_at || null,
     storyId: message.story ?? null,
+    storyContext: message.story_context ? {
+      id: message.story_context.id,
+      authorId: message.story_context.author.id,
+      authorName: (message.story_context.author_display_name ?? "").trim() || message.story_context.author.email,
+      mediaType: message.story_context.media_type,
+      mediaUrl: message.story_context.media_url ? resolveMediaUrl(message.story_context.media_url) : null,
+      caption: message.story_context.caption,
+    } : null,
     replyToMessageId: message.reply_to_message ? String(message.reply_to_message) : null,
+    providerPayload: message.provider_payload ?? null,
     reactions: (message.reactions || []).map((reaction) => ({
       id: reaction.id,
       emoji: reaction.emoji,
@@ -697,7 +713,6 @@ function buildProfilePayload(values: ProfileFormValues): ApiProfileWritePayload 
     show_age: values.showAge,
     allow_video_calls: values.allowVideoCalls,
     allow_date_suggestions: values.allowDateSuggestions,
-    allow_study_match: values.allowStudyMatch,
     is_invisible_mode: values.invisibleMode,
     interest_ids: values.interestIds,
   };
@@ -718,7 +733,7 @@ export async function login(payload: LoginPayload) {
     method: "POST",
     body: payload,
   });
-  storeTokens({ access: response.access, refresh: response.refresh });
+  storeAccessToken(response.access);
   return response.user;
 }
 
@@ -856,6 +871,7 @@ export async function saveMyProfile(values: ProfileFormValues) {
 export async function updateMyProfileSettings(payload: {
   allowDateSuggestions?: boolean;
   spotifyTrack?: AppSpotifyTrack | null;
+  accentColor?: string;
 }) {
   const existingProfile = await fetchMyProfile();
   const profile = await request<ApiProfile>(`/profiles/${existingProfile.uuid}/`, {
@@ -883,6 +899,9 @@ export async function updateMyProfileSettings(payload: {
               spotify_album_image_url: "",
               spotify_preview_url: "",
             }),
+      ...(payload.accentColor !== undefined
+        ? { accent_color: normalizeAccentColor(payload.accentColor) }
+        : {}),
     },
     auth: true,
   });
@@ -915,16 +934,16 @@ export async function uploadProfilePhoto(payload: {
 }
 
 export async function deleteProfilePhoto(photoId: number) {
-  const tokens = getStoredTokens();
-  if (!tokens?.access) {
-    throw new ApiError("Faça login para continuar.", 401);
+  if (!accessToken) {
+    accessToken = await refreshAccessToken();
   }
 
   const response = await fetch(`${API_BASE_URL}/photos/${photoId}/`, {
     method: "DELETE",
+    credentials: "include",
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${tokens.access}`,
+      Authorization: `Bearer ${accessToken}`,
       "ngrok-skip-browser-warning": "true",
     },
   });
@@ -933,6 +952,7 @@ export async function deleteProfilePhoto(photoId: number) {
     const nextAccessToken = await refreshAccessToken();
     await fetch(`${API_BASE_URL}/photos/${photoId}/`, {
       method: "DELETE",
+      credentials: "include",
       headers: {
         Accept: "application/json",
         Authorization: `Bearer ${nextAccessToken}`,
@@ -1014,12 +1034,13 @@ export async function sendMessage(payload: {
   conversationId: number;
   content?: string;
   file?: File | null;
-  type?: "text" | "image" | "video" | "story_reply";
+  type?: "text" | "image" | "video" | "story_reply" | "date_suggestion";
   isViewOnce?: boolean;
   storyId?: number | null;
   replyToMessageId?: string | null;
   currentUserId?: number;
   clientRequestId?: string;
+  providerPayload?: Record<string, unknown> | null;
 }) {
   const body = new FormData();
   body.append("conversation", String(payload.conversationId));
@@ -1037,6 +1058,9 @@ export async function sendMessage(payload: {
   }
   if (payload.replyToMessageId) {
     body.append("reply_to_message", payload.replyToMessageId);
+  }
+  if (payload.providerPayload) {
+    body.append("provider_payload", JSON.stringify(payload.providerPayload));
   }
   const message = await request<ApiMessage>("/messages/", {
     method: "POST",
@@ -1094,10 +1118,11 @@ export async function createStory(payload: {
   caption?: string;
   clientRequestId?: string;
 }) {
+  const normalizedCaption = payload.caption?.trim() ?? "";
   const body = new FormData();
   body.append("media", payload.file);
   body.append("media_type", payload.mediaType);
-  body.append("caption", payload.caption || "");
+  body.append("caption", normalizedCaption);
   if (payload.clientRequestId) {
     body.append("client_request_id", payload.clientRequestId);
   }
@@ -1125,8 +1150,19 @@ export async function reactToStory(storyId: number, emoji: string) {
   return {
     id: reaction.id,
     emoji: reaction.emoji,
-    userName: reaction.user.email,
+    userName: (reaction.user_display_name ?? "").trim() || reaction.user.email,
   };
+}
+
+export async function replyToStory(storyId: number, content: string, currentUserId?: number) {
+  const message = await request<ApiMessage>(`/stories/${storyId}/reply/`, {
+    method: "POST",
+    body: { content },
+    auth: true,
+  });
+  const resolvedCurrentUserId = currentUserId ?? (await fetchCurrentUser()).id;
+
+  return mapApiMessageToAppMessage(message, resolvedCurrentUserId);
 }
 
 export async function createBlock(blockedUserId: number, reason?: string) {
@@ -1140,16 +1176,25 @@ export async function createBlock(blockedUserId: number, reason?: string) {
   });
 }
 
-export async function fetchLikesReceived() {
-  const response = await request<{ visible: boolean; results: ApiLikeReceived[] }>("/connections/likes-received/", {
+export async function fetchLikesReceived(offset = 0, limit = 10) {
+  const response = await request<{
+    visible: boolean;
+    count: number;
+    next_offset: number | null;
+    results: ApiLikeReceived[];
+  }>(`/connections/likes-received/?offset=${offset}&limit=${limit}`, {
     auth: true,
   });
-  return response.results.map<AppLikeReceived>((item) => ({
-    connectionId: item.connection_id,
-    status: item.status,
-    visible: item.visible,
-    profile: item.profile ? mapProfileToCard(item.profile) : null,
-  }));
+  return {
+    items: response.results.map<AppLikeReceived>((item) => ({
+      connectionId: item.connection_id,
+      status: item.status,
+      visible: item.visible,
+      profile: item.profile ? mapProfileToCard(item.profile) : null,
+    })),
+    nextOffset: response.next_offset,
+    count: response.count,
+  };
 }
 
 export async function unlockLikesReceived() {
@@ -1174,12 +1219,36 @@ export async function rewardVideoWatch() {
   });
 }
 
-export async function createStripePaymentIntent(planId: number) {
-  return request<{ payment_intent_id: string; client_secret: string }>("/payments/intents/", {
+export async function createAbacatePayBilling(planId: number, cpf = "") {
+  return request<{ checkout_url: string }>("/payments/intents/", {
     method: "POST",
-    body: { plan_id: planId },
+    body: { plan_id: planId, method: "card", cpf },
     auth: true,
   });
+}
+
+export async function createAbacatePayPix(planId: number, cpf: string) {
+  return request<{ pix_code: string; qr_code_image: string }>("/payments/intents/", {
+    method: "POST",
+    body: { plan_id: planId, method: "pix", cpf },
+    auth: true,
+  });
+}
+
+export async function undoLastConnection(): Promise<{
+  undone_connection_id: number;
+  affected_match_id: number | null;
+  profile: AppUserProfile;
+}> {
+  const data = await request<{
+    undone_connection_id: number;
+    affected_match_id: number | null;
+    profile: ApiProfile;
+  }>("/connections/undo/", { method: "POST", auth: true });
+  return {
+    ...data,
+    profile: mapProfileToCard(data.profile),
+  };
 }
 
 export async function fetchPremiumPlans() {
@@ -1223,7 +1292,31 @@ export async function sendLocationPing(payload: {
   });
 }
 
-export async function fetchDateSuggestions(matchId: string) {
+export async function fetchDateReadiness(conversationId: string) {
+  const data = await request<{
+    ready: boolean;
+    message_count: number;
+    detected_interests: string[];
+    suggested_categories: string[];
+    category_labels: string[];
+  }>(`/conversations/${conversationId}/date-readiness/`, { auth: true });
+  return {
+    ready: data.ready,
+    messageCount: data.message_count,
+    detectedInterests: data.detected_interests,
+    suggestedCategories: data.suggested_categories,
+    categoryLabels: data.category_labels,
+  };
+}
+
+export async function fetchDateSuggestions(matchId: string, radiusKm = 5, categories?: string[], query?: string) {
+  let url = `/matches/${matchId}/date-suggestions/?radius=${radiusKm}`;
+  if (categories && categories.length > 0) {
+    url += `&categories=${categories.join(",")}`;
+  }
+  if (query && query.trim()) {
+    url += `&query=${encodeURIComponent(query.trim())}`;
+  }
   const suggestions = await request<Array<{
     name: string;
     rating?: number;
@@ -1232,7 +1325,7 @@ export async function fetchDateSuggestions(matchId: string) {
     maps_url: string;
     latitude: number;
     longitude: number;
-  }>>(`/matches/${matchId}/date-suggestions/`, { auth: true });
+  }>>(url, { auth: true });
   return suggestions.map<DateSuggestion>((item) => ({
     name: item.name,
     rating: item.rating,

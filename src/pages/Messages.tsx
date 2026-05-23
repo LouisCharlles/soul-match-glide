@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
@@ -12,6 +13,7 @@ import {
   ChevronUp,
   Flag,
   ImagePlus,
+  LoaderCircle,
   MapPinned,
   PlayCircle,
   Search,
@@ -26,18 +28,23 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Slider } from "@/components/ui/slider";
 import {
   consumeViewOnceMessage,
   createBlock,
   createStory,
+  fetchDateReadiness,
   fetchDateSuggestions,
   fetchMatches,
   fetchMessages,
+  fetchMyProfile,
   fetchMyStories,
   fetchStoriesFeed,
   markConversationAsRead,
   reactToMessage,
   reactToStory,
+  replyToStory,
   registerStoryView,
   sendLocationPing,
   sendMessage,
@@ -45,10 +52,13 @@ import {
   mapApiStory,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { DEFAULT_ACCENT_COLOR, getContrastTextColor, hexToRgba, normalizeAccentColor } from "@/lib/colors";
 import { useRealtime } from "@/contexts/RealtimeContext";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { useToast } from "@/hooks/use-toast";
 import { buildWebSocketUrl } from "@/lib/realtime";
-import type { AppMatch, AppMessage, AppStory, DateSuggestion } from "@/lib/types";
+import type { AppMatch, AppMessage, AppStory, DateReadiness, DateSuggestion } from "@/lib/types";
+import type { CSSProperties } from "react";
 
 const QUICK_REACTIONS = ["❤️", "😂", "🔥", "👏"];
 
@@ -81,8 +91,24 @@ interface ActiveStoryState {
   storyIndex: number;
 }
 
+interface DateIntentPayload {
+  intent: string;
+  confidence: number;
+  entities: { cuisine_or_amenity?: string | null; time?: string | null };
+  suggestions: Array<{
+    name: string;
+    rating?: number;
+    vicinity?: string;
+    distance_km: number;
+    maps_url: string;
+    latitude: number;
+    longitude: number;
+  }>;
+}
+
 interface MessageRealtimeEvent {
-  type: "message.created" | "message.updated" | "message.read";
+  type: "message.created" | "message.updated" | "message.read" | "date.intent.detected";
+  conversation_id?: number;
   data?: unknown;
 }
 
@@ -107,11 +133,26 @@ function upsertStoryCollection(currentStories: AppStory[], nextStory: AppStory) 
   ))];
 }
 
+function removeStoryFromCollection(currentStories: AppStory[], nextStory: Pick<AppStory, "id" | "clientRequestId">) {
+  return currentStories.filter((story) => (
+    story.id !== nextStory.id
+    && (!nextStory.clientRequestId || story.clientRequestId !== nextStory.clientRequestId)
+  ));
+}
+
 function getMatchOnlineStatus(match: AppMatch, presenceByUserId: Record<number, boolean>) {
   return presenceByUserId[match.user.userId] ?? match.user.online;
 }
 
 function getMessagePreviewText(message: AppMessage) {
+  if (message.type === "story_reply") {
+    if (message.text) {
+      return message.text;
+    }
+    if (message.storyContext) {
+      return "Respondeu ao story";
+    }
+  }
   if (message.text) {
     return message.text;
   }
@@ -124,10 +165,21 @@ function getMessagePreviewText(message: AppMessage) {
   return "Nova mensagem";
 }
 
+function getMessageBubbleStyle(accentColor: string, isMine: boolean): CSSProperties {
+  const normalizedAccent = normalizeAccentColor(accentColor);
+  return {
+    backgroundColor: isMine ? normalizedAccent : hexToRgba(normalizedAccent, 0.18),
+    borderColor: hexToRgba(normalizedAccent, isMine ? 0.4 : 0.32),
+    color: isMine ? getContrastTextColor(normalizedAccent) : undefined,
+  };
+}
+
 const Messages = () => {
   const { toast } = useToast();
+  const isMobileViewport = useIsMobile();
   const { user } = useAuth();
   const { presenceByUserId, subscribeToStoryEvents } = useRealtime();
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedMatch, setSelectedMatch] = useState<AppMatch | null>(null);
   const [search, setSearch] = useState("");
@@ -136,6 +188,7 @@ const Messages = () => {
   const [newMessage, setNewMessage] = useState("");
   const [pendingAttachment, setPendingAttachment] = useState<PendingAttachment | null>(null);
   const [storyFile, setStoryFile] = useState<File | null>(null);
+  const [storyCaption, setStoryCaption] = useState("");
   const [myStories, setMyStories] = useState<AppStory[]>([]);
   const [matchStories, setMatchStories] = useState<AppStory[]>([]);
   const [activeStory, setActiveStory] = useState<ActiveStoryState | null>(null);
@@ -143,13 +196,26 @@ const Messages = () => {
   const [dateSuggestions, setDateSuggestions] = useState<DateSuggestion[]>([]);
   const [selectedSuggestion, setSelectedSuggestion] = useState<DateSuggestion | null>(null);
   const [hasRequestedDateSuggestions, setHasRequestedDateSuggestions] = useState(false);
+  const [dateRadiusSheetOpen, setDateRadiusSheetOpen] = useState(false);
+  const [dateRadiusKm, setDateRadiusKm] = useState(5);
+  const [dateReadiness, setDateReadiness] = useState<DateReadiness | null>(null);
+  const [datePanelOpen, setDatePanelOpen] = useState(false);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [dateNameQuery, setDateNameQuery] = useState("");
+  const [hasShownReadinessPopup, setHasShownReadinessPopup] = useState(false);
+  const [readinessNotificationOpen, setReadinessNotificationOpen] = useState(false);
+  const [intentDetected, setIntentDetected] = useState(false);
   const [isStoriesPanelOpen, setIsStoriesPanelOpen] = useState(true);
   const [reportOpen, setReportOpen] = useState(false);
   const [isLoadingMatches, setIsLoadingMatches] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
+  const [isSendingDateSuggestion, setIsSendingDateSuggestion] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [currentUserAccentColor, setCurrentUserAccentColor] = useState(DEFAULT_ACCENT_COLOR);
+  const [storyReplyText, setStoryReplyText] = useState("");
+  const [isReplyingToStory, setIsReplyingToStory] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -159,6 +225,20 @@ const Messages = () => {
   const selectedMatchRef = useRef<AppMatch | null>(null);
   const selectedChatId = searchParams.get("chat");
 
+  // Pre-warm the matches cache so navigation back to this screen shows data instantly
+  const { data: cachedMatches } = useQuery({
+    queryKey: ["conversations"],
+    queryFn: fetchMatches,
+    staleTime: 20_000,
+  });
+
+  useEffect(() => {
+    if (cachedMatches && matches.length === 0) {
+      setMatches(cachedMatches);
+      setIsLoadingMatches(false);
+    }
+  }, [cachedMatches, matches.length]);
+
   useEffect(() => {
     matchesRef.current = matches;
   }, [matches]);
@@ -167,26 +247,34 @@ const Messages = () => {
     selectedMatchRef.current = selectedMatch;
   }, [selectedMatch]);
 
+  useEffect(() => {
+    setStoryReplyText("");
+  }, [activeStory?.groupKey, activeStory?.storyIndex]);
+
   const refreshSidebarData = useCallback(async (options?: { initial?: boolean }) => {
     const initial = options?.initial ?? false;
     if (initial) {
       setIsLoadingMatches(true);
     }
 
-    const [matchesResult, matchStoriesResult, myStoriesResult] = await Promise.allSettled([
+    const [matchesResult, matchStoriesResult, myStoriesResult, myProfileResult] = await Promise.allSettled([
       fetchMatches(),
       fetchStoriesFeed(),
       fetchMyStories(),
+      fetchMyProfile(),
     ]);
 
     if (matchesResult.status === "fulfilled") {
       setMatches(matchesResult.value);
     }
     if (matchStoriesResult.status === "fulfilled") {
-      setMatchStories(matchStoriesResult.value);
+      setMatchStories(matchStoriesResult.value.filter((story) => story.authorId !== user?.id));
     }
     if (myStoriesResult.status === "fulfilled") {
       setMyStories(myStoriesResult.value);
+    }
+    if (myProfileResult.status === "fulfilled") {
+      setCurrentUserAccentColor(myProfileResult.value.accentColor);
     }
     setErrorMessage("");
     debugMessages("sidebar bootstrap concluído", {
@@ -194,6 +282,7 @@ const Messages = () => {
       matchesLoaded: matchesResult.status === "fulfilled",
       feedStoriesLoaded: matchStoriesResult.status === "fulfilled",
       myStoriesLoaded: myStoriesResult.status === "fulfilled",
+      currentProfileLoaded: myProfileResult.status === "fulfilled",
     });
 
     setSelectedMatch((currentSelected) => {
@@ -223,7 +312,7 @@ const Messages = () => {
     if (initial) {
       setIsLoadingMatches(false);
     }
-  }, [selectedChatId]);
+  }, [selectedChatId, user?.id]);
 
   const refreshConversation = useCallback(async (
     match: AppMatch,
@@ -321,6 +410,9 @@ const Messages = () => {
   const selectedMatchOnline = selectedMatch
     ? getMatchOnlineStatus(selectedMatch, presenceByUserId)
     : false;
+  const selectedMatchAccentColor = selectedMatch?.user.accentColor ?? DEFAULT_ACCENT_COLOR;
+  const currentUserTextColor = getContrastTextColor(currentUserAccentColor);
+  const selectedMatchTextColor = getContrastTextColor(selectedMatchAccentColor);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -366,6 +458,46 @@ const Messages = () => {
   }, [refreshConversation, selectedMatch, toast]);
 
   useEffect(() => {
+    setDateReadiness(null);
+    setDatePanelOpen(false);
+    setDateSuggestions([]);
+    setSelectedSuggestion(null);
+    setHasRequestedDateSuggestions(false);
+    setSelectedCategories([]);
+    setDateNameQuery("");
+    setHasShownReadinessPopup(false);
+    setIntentDetected(false);
+  }, [selectedMatch?.id]);
+
+  useEffect(() => {
+    if (!selectedMatch?.conversationId) return;
+    const conversationId = selectedMatch.conversationId;
+    let isMounted = true;
+
+    const checkReadiness = async () => {
+      try {
+        const readiness = await fetchDateReadiness(conversationId);
+        if (!isMounted) return;
+        setDateReadiness(readiness);
+        if (readiness.ready) {
+          setHasShownReadinessPopup((prev) => {
+            if (!prev) {
+              setReadinessNotificationOpen(true);
+              return true;
+            }
+            return prev;
+          });
+        }
+      } catch {
+        // silently ignore
+      }
+    };
+
+    void checkReadiness();
+    return () => { isMounted = false; };
+  }, [selectedMatch?.conversationId, selectedMatch?.id]);
+
+  useEffect(() => {
     return subscribeToStoryEvents((event) => {
       if (event.entity !== "story") {
         return;
@@ -381,6 +513,7 @@ const Messages = () => {
       const story = mapApiStory(event.data as never);
 
       if (story.authorId === user?.id) {
+        setMatchStories((current) => removeStoryFromCollection(current, story));
         setMyStories((current) => upsertStoryCollection(current, story));
         return;
       }
@@ -390,7 +523,8 @@ const Messages = () => {
         return;
       }
 
-      setMatchStories((current) => upsertStoryCollection(current, story));
+      setMyStories((current) => removeStoryFromCollection(current, story));
+      setMatchStories((current) => upsertStoryCollection(removeStoryFromCollection(current, story), story));
     });
   }, [subscribeToStoryEvents, user?.id]);
 
@@ -448,6 +582,25 @@ const Messages = () => {
           const currentMatch = selectedMatchRef.current;
           if (currentMatch?.id === currentMatchId) {
             void refreshConversation(currentMatch, { silent: true, markRead: false });
+          }
+        }
+
+        if (payload.type === "date.intent.detected") {
+          const intentData = payload.data as DateIntentPayload;
+          setIntentDetected(true);
+          if (intentData.suggestions?.length) {
+            setDateSuggestions(
+              intentData.suggestions.map((item) => ({
+                name: item.name,
+                rating: item.rating,
+                vicinity: item.vicinity,
+                distanceKm: item.distance_km,
+                mapsUrl: item.maps_url,
+                latitude: item.latitude,
+                longitude: item.longitude,
+              })),
+            );
+            setHasRequestedDateSuggestions(true);
           }
         }
       } catch (error) {
@@ -544,7 +697,13 @@ const Messages = () => {
 
     setIsSending(true);
     try {
-      const clientRequestId = crypto.randomUUID();
+      const clientRequestId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" 
+      ? crypto.randomUUID() 
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+          const r = Math.random() * 16 | 0;
+          const v = c === 'x' ? r : (r & 0x3 | 0x8);
+          return v.toString(16);
+      });
       const sentMessage = await sendMessage({
         conversationId: selectedMatch.conversationId,
         content: newMessage.trim(),
@@ -572,6 +731,7 @@ const Messages = () => {
       setNewMessage("");
       resetAttachment();
       setErrorMessage("");
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Tente novamente.";
       setErrorMessage(message);
@@ -592,11 +752,14 @@ const Messages = () => {
 
     try {
       const clientRequestId = crypto.randomUUID();
+      const normalizedCaption = storyCaption.trim();
       const story = await createStory({
         file: storyFile,
         mediaType: storyFile.type.startsWith("video/") ? "video" : "image",
+        caption: normalizedCaption,
         clientRequestId,
       });
+      setMatchStories((current) => removeStoryFromCollection(current, story));
       setMyStories((current) => upsertStoryCollection(current, story));
       toast({
         title: "Story publicado",
@@ -610,6 +773,7 @@ const Messages = () => {
       });
     } finally {
       setStoryFile(null);
+      setStoryCaption("");
       if (storyFileInputRef.current) {
         storyFileInputRef.current.value = "";
       }
@@ -669,6 +833,49 @@ const Messages = () => {
     }
   };
 
+  const handleReplyToStory = async () => {
+    if (!activeStoryItem || activeStoryGroup?.source !== "matches" || !user?.id) {
+      return;
+    }
+
+    const content = storyReplyText.trim();
+    if (!content) {
+      return;
+    }
+
+    setIsReplyingToStory(true);
+    try {
+      const replyMessage = await replyToStory(activeStoryItem.id, content, user.id);
+      const relatedMatch = matchesRef.current.find((match) => match.user.userId === activeStoryItem.authorId);
+      if (relatedMatch) {
+        setMessages((prev) => ({
+          ...prev,
+          [relatedMatch.id]: mergeMessageList(prev[relatedMatch.id] || [], replyMessage),
+        }));
+        setMatches((prev) =>
+          prev.map((match) =>
+            match.id === relatedMatch.id
+              ? {
+                  ...match,
+                  lastMessage: getMessagePreviewText(replyMessage),
+                  timestamp: "agora",
+                }
+              : match,
+          ),
+        );
+      }
+      setStoryReplyText("");
+    } catch (error) {
+      toast({
+        title: "Não foi possível responder ao story",
+        description: error instanceof Error ? error.message : "Tente novamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsReplyingToStory(false);
+    }
+  };
+
   const requestLocationPing = async () => {
     if (!("geolocation" in navigator)) {
       throw new Error("Seu dispositivo não disponibilizou geolocalização no navegador.");
@@ -689,7 +896,7 @@ const Messages = () => {
     });
   };
 
-  const handleSuggestDate = async () => {
+  const handleSuggestDate = async (radiusKm = 5, categories?: string[], nameQuery?: string) => {
     if (!selectedMatch) {
       return;
     }
@@ -698,7 +905,7 @@ const Messages = () => {
     setHasRequestedDateSuggestions(true);
     try {
       await requestLocationPing();
-      const suggestions = await fetchDateSuggestions(selectedMatch.id);
+      const suggestions = await fetchDateSuggestions(selectedMatch.id, radiusKm, categories, nameQuery);
       setDateSuggestions(suggestions);
       setSelectedSuggestion(suggestions[0] ?? null);
       setErrorMessage("");
@@ -717,6 +924,38 @@ const Messages = () => {
       });
     } finally {
       setIsLoadingSuggestions(false);
+    }
+  };
+
+  const handleSendDateSuggestion = async (suggestion: DateSuggestion) => {
+    if (!selectedMatch?.conversationId || isSendingDateSuggestion) return;
+    setIsSendingDateSuggestion(true);
+    try {
+      await sendMessage({
+        conversationId: selectedMatch.conversationId,
+        type: "date_suggestion",
+        content: `📍 ${suggestion.name}${suggestion.vicinity ? ` — ${suggestion.vicinity}` : ""}`,
+        providerPayload: {
+          name: suggestion.name,
+          vicinity: suggestion.vicinity,
+          maps_url: suggestion.mapsUrl,
+          latitude: suggestion.latitude,
+          longitude: suggestion.longitude,
+          rating: suggestion.rating,
+        },
+      });
+      setDateSuggestions([]);
+      setSelectedSuggestion(null);
+      setHasRequestedDateSuggestions(false);
+      setDatePanelOpen(false);
+    } catch (error) {
+      toast({
+        title: "Não foi possível enviar a sugestão",
+        description: error instanceof Error ? error.message : "Tente novamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSendingDateSuggestion(false);
     }
   };
 
@@ -804,6 +1043,16 @@ const Messages = () => {
 
   const showChat = selectedMatch !== null;
 
+  const filteredDateSuggestions = dateSuggestions;
+
+  const allDateCategories = useMemo(() => {
+    if (!dateReadiness?.categoryLabels?.length) return [];
+    return dateReadiness.categoryLabels.map((label, i) => ({
+      label,
+      id: dateReadiness.suggestedCategories[i] ?? label,
+    }));
+  }, [dateReadiness]);
+
   return (
     <section className="flex h-[calc(100dvh-11.5rem)] min-h-[38rem] flex-col gap-4 lg:h-[calc(100dvh-10rem)]" aria-labelledby="messages-heading">
       <h1 id="messages-heading" className="sr-only">Mensagens</h1>
@@ -831,12 +1080,25 @@ const Messages = () => {
               type="file"
               accept="image/*,video/*"
               className="hidden"
-              onChange={(event) => setStoryFile(event.target.files?.[0] ?? null)}
+              onChange={(event) => {
+                setStoryFile(event.target.files?.[0] ?? null);
+                setStoryCaption("");
+              }}
             />
             {storyFile ? (
-              <div className="flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs text-muted-foreground">
-                <span className="max-w-[11rem] truncate">{storyFile.name}</span>
-                <Button size="sm" className="h-8" onClick={() => void handleCreateStory()}>
+              <div className="flex w-full flex-col gap-2 rounded-2xl border border-white/10 px-3 py-3 text-xs text-muted-foreground md:w-auto">
+                <div className="flex items-center gap-2">
+                  <span className="max-w-[11rem] truncate">{storyFile.name}</span>
+                </div>
+                <Input
+                  aria-label="Legenda do story"
+                  placeholder="Adicione uma legenda (opcional)"
+                  value={storyCaption}
+                  onChange={(event) => setStoryCaption(event.target.value)}
+                  maxLength={280}
+                  className="h-9 border-white/10 bg-background/35 text-xs"
+                />
+                <Button size="sm" className="h-8 self-end" onClick={() => void handleCreateStory()}>
                   Enviar
                 </Button>
               </div>
@@ -855,11 +1117,16 @@ const Messages = () => {
                 onClick={() => void openStoryGroup(group)}
                 className="flex min-w-[4.75rem] flex-col items-center gap-2"
               >
-                <div className={`h-16 w-16 overflow-hidden rounded-full border-2 p-0.5 ${group.source === "mine" ? "border-white/20" : "border-primary"}`}>
+                <div
+                  className="h-16 w-16 overflow-hidden rounded-full border-2 p-0.5"
+                  style={{
+                    borderColor: group.source === "mine" ? hexToRgba(currentUserAccentColor, 0.35) : hexToRgba(DEFAULT_ACCENT_COLOR, 0.6),
+                  }}
+                >
                   <div className="relative h-full w-full overflow-hidden rounded-full bg-accent/30">
                     {previewStory.mediaType === "video" ? (
-                      <div className="flex h-full w-full items-center justify-center bg-primary/15">
-                        <PlayCircle className="h-6 w-6 text-primary" />
+                      <div className="flex h-full w-full items-center justify-center" style={{ backgroundColor: hexToRgba(currentUserAccentColor, group.source === "mine" ? 0.18 : 0.14) }}>
+                        <PlayCircle className="h-6 w-6" style={{ color: group.source === "mine" ? currentUserAccentColor : DEFAULT_ACCENT_COLOR }} />
                       </div>
                     ) : (
                       <img src={previewStory.mediaUrl} alt={group.authorName} className="h-full w-full object-cover" />
@@ -872,7 +1139,8 @@ const Messages = () => {
                     {group.items.map((story) => (
                       <span
                         key={story.id}
-                        className={`h-1 flex-1 rounded-full ${group.source === "mine" ? "bg-white/25" : "bg-primary/60"}`}
+                        className="h-1 flex-1 rounded-full"
+                        style={{ backgroundColor: group.source === "mine" ? hexToRgba(currentUserAccentColor, 0.45) : hexToRgba(DEFAULT_ACCENT_COLOR, 0.6) }}
                       />
                     ))}
                   </div>
@@ -925,7 +1193,12 @@ const Messages = () => {
                 }`}
               >
                 <div className="relative flex-shrink-0">
-                  <img src={match.user.photos[0]} alt={match.user.name} className="h-14 w-14 rounded-full border-2 border-primary object-cover" />
+                  <img
+                    src={match.user.photos[0]}
+                    alt={match.user.name}
+                    className="h-14 w-14 rounded-full border-2 object-cover"
+                    style={{ borderColor: match.user.accentColor }}
+                  />
                   {match.user.online ? (
                     <div className="absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-2 border-card bg-success" />
                   ) : null}
@@ -956,7 +1229,12 @@ const Messages = () => {
                   <span className="sr-only">Voltar para a lista de conversas</span>
                   <ArrowLeft className="h-5 w-5" />
                 </button>
-                <img src={selectedMatch.user.photos[0]} alt={`Foto de perfil de ${selectedMatch.user.name}`} className="h-11 w-11 rounded-full object-cover" />
+                <img
+                  src={selectedMatch.user.photos[0]}
+                  alt={`Foto de perfil de ${selectedMatch.user.name}`}
+                  className="h-11 w-11 rounded-full border-2 object-cover"
+                  style={{ borderColor: selectedMatchAccentColor }}
+                />
                 <div className="min-w-0">
                   <div className="flex items-center gap-1">
                     <p className="truncate text-sm font-heading text-foreground">{selectedMatch.user.name}</p>
@@ -966,11 +1244,60 @@ const Messages = () => {
                     {selectedMatchOnline ? "Online" : "Offline"}
                   </p>
                 </div>
-                <div className="ml-auto flex items-center gap-2">
-                  <Button type="button" variant="outline" size="sm" onClick={() => void handleSuggestDate()} disabled={isLoadingSuggestions}>
-                    <MapPinned className="mr-2 h-4 w-4" />
-                    {isLoadingSuggestions ? "Localizando..." : "Sugerir date"}
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size={isMobileViewport ? "icon" : "sm"}
+                    onClick={() => setDatePanelOpen((prev) => !prev)}
+                    disabled={isLoadingSuggestions}
+                    className={`${isMobileViewport ? "h-9 w-9" : ""} ${dateReadiness?.ready || intentDetected ? "date-ready-btn" : ""}`}
+                    aria-label={isLoadingSuggestions ? "Localizando sugestões de date" : "Sugerir date"}
+                    title={isLoadingSuggestions ? "Localizando..." : dateReadiness?.ready || intentDetected ? "✨ Sugerir date" : "Sugerir date"}
+                  >
+                    <MapPinned className="h-4 w-4 md:mr-2" />
+                    <span className="hidden md:inline">
+                      {isLoadingSuggestions ? "Localizando..." : dateReadiness?.ready || intentDetected ? "✨ Sugerir date" : "Sugerir date"}
+                    </span>
                   </Button>
+                  <Sheet open={dateRadiusSheetOpen} onOpenChange={setDateRadiusSheetOpen}>
+                    <SheetContent side="bottom" className="pb-8">
+                      <SheetHeader>
+                        <SheetTitle>Raio de busca</SheetTitle>
+                      </SheetHeader>
+                      <div className="space-y-6 py-6">
+                        <p className="text-center font-heading text-3xl">{dateRadiusKm} km</p>
+                        <Slider
+                          min={1}
+                          max={100}
+                          step={1}
+                          value={[dateRadiusKm]}
+                          onValueChange={([v]) => setDateRadiusKm(v)}
+                        />
+                        <Button
+                          className="w-full"
+                          disabled={isLoadingSuggestions}
+                          onClick={() => {
+                            setDateRadiusSheetOpen(false);
+                            void handleSuggestDate(
+                              dateRadiusKm,
+                              selectedCategories.length ? selectedCategories : undefined,
+                              dateNameQuery.trim() || undefined
+                            ); // <- Adicione os parâmetros que faltavam
+                          }}
+                        >
+                          {isLoadingSuggestions ? (
+                            <>
+                              <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                              Buscando...
+                            </>
+                          ) : (
+                            "Buscar lugares"
+                          )}
+                        </Button>
+                      </div>
+                    </SheetContent>
+                  </Sheet>
                   <Button
                     type="button"
                     variant="outline"
@@ -1006,70 +1333,94 @@ const Messages = () => {
               </div>
 
               <div className="flex-1 space-y-3 overflow-y-auto p-4">
-                {dateSuggestions.length > 0 ? (
-                  <div className="grid gap-3 pb-2">
-                    <div className="grid gap-3 xl:grid-cols-2">
-                      {dateSuggestions.map((suggestion) => (
-                        <button
-                          key={`${suggestion.name}-${suggestion.mapsUrl}`}
-                          type="button"
-                          onClick={() => setSelectedSuggestion(suggestion)}
-                          className={`rounded-2xl border p-4 text-left transition-colors ${
-                            selectedSuggestion?.mapsUrl === suggestion.mapsUrl
-                              ? "border-primary bg-primary/10"
-                              : "border-white/10 bg-accent/30"
-                          }`}
-                        >
-                          <p className="font-body-bold text-foreground">{suggestion.name}</p>
-                          <p className="text-sm text-muted-foreground">{suggestion.vicinity}</p>
-                          <p className="mt-1 text-xs text-primary">
-                            {suggestion.distanceKm} km · nota {suggestion.rating ?? "s/n"}
-                          </p>
-                        </button>
-                      ))}
-                    </div>
-                    {selectedSuggestion ? (
-                      <div className="rounded-[1.75rem] border border-white/10 bg-background/35 p-4">
-                        <div className="mb-3 flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-lg font-heading text-foreground">{selectedSuggestion.name}</p>
-                            <p className="text-sm text-muted-foreground">{selectedSuggestion.vicinity}</p>
-                          </div>
-                          <a href={selectedSuggestion.mapsUrl} target="_blank" rel="noreferrer" className="text-sm font-body-bold text-primary">
-                            Abrir no Google Maps
-                          </a>
-                        </div>
-                        <GoogleMap
-                          latitude={selectedSuggestion.latitude}
-                          longitude={selectedSuggestion.longitude}
-                          title={selectedSuggestion.name}
-                        />
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {hasRequestedDateSuggestions && !isLoadingSuggestions && dateSuggestions.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-white/10 bg-background/25 p-4 text-sm text-muted-foreground">
-                    Nenhum lugar disponível foi encontrado no meio do caminho entre vocês agora.
-                  </div>
-                ) : null}
-
                 {isLoadingMessages ? (
                   <div className="text-sm font-body text-muted-foreground">Carregando mensagens...</div>
                 ) : null}
 
                 {(messages[selectedMatch.id] || []).map((message) => {
                   const isMine = message.isMine;
+                  const bubbleAccentColor = isMine ? currentUserAccentColor : selectedMatchAccentColor;
+                  const bubbleTextColor = isMine ? currentUserTextColor : selectedMatchTextColor;
                   return (
                     <div key={message.id} className={`flex ${isMine ? "justify-end" : "justify-start"}`}>
                       <div
-                        className={`max-w-[82%] rounded-2xl px-4 py-3 text-sm font-body xl:max-w-[70%] ${
-                          isMine
-                            ? "rounded-br-md bg-primary text-primary-foreground"
-                            : "rounded-bl-md bg-accent text-foreground"
+                        className={`max-w-[82%] rounded-2xl border px-4 py-3 text-sm font-body xl:max-w-[70%] ${
+                          isMine ? "rounded-br-md" : "rounded-bl-md"
                         }`}
+                        style={getMessageBubbleStyle(bubbleAccentColor, isMine)}
                       >
+                        {message.type === "date_suggestion" && message.providerPayload ? (
+                          <div className="space-y-2">
+                            <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                              Sugestão de date
+                            </p>
+                            <div className="rounded-xl border border-white/10 bg-background/15 p-3">
+                              <div className="flex items-start gap-2">
+                                <MapPinned className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                                <div className="min-w-0">
+                                  <p className="font-body-bold text-foreground">{String(message.providerPayload.name)}</p>
+                                  {message.providerPayload.vicinity ? (
+                                    <p className="text-xs text-muted-foreground">{String(message.providerPayload.vicinity)}</p>
+                                  ) : null}
+                                  {message.providerPayload.rating ? (
+                                    <p className="mt-1 text-xs text-primary">Nota {String(message.providerPayload.rating)}</p>
+                                  ) : null}
+                                </div>
+                              </div>
+                              {message.providerPayload.maps_url ? (
+                                <a
+                                  href={String(message.providerPayload.maps_url)}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="mt-2 block text-center text-xs font-body-bold text-primary hover:underline"
+                                >
+                                  Abrir no Google Maps
+                                </a>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {message.type === "story_reply" ? (
+                          <div className="mb-2 rounded-xl border border-white/10 bg-background/15 p-2">
+                            <p className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+                              Resposta a um story
+                            </p>
+                            {message.storyContext ? (
+                              <div className="mt-2 flex items-center gap-3">
+                                {message.storyContext.mediaUrl ? (
+                                  message.storyContext.mediaType === "video" ? (
+                                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-background/25">
+                                      <PlayCircle className="h-5 w-5" />
+                                    </div>
+                                  ) : (
+                                    <img
+                                      src={message.storyContext.mediaUrl}
+                                      alt={message.storyContext.caption || message.storyContext.authorName}
+                                      className="h-12 w-12 rounded-lg object-cover"
+                                    />
+                                  )
+                                ) : (
+                                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-background/25 text-[10px] uppercase tracking-[0.15em]">
+                                    Story
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="truncate text-xs font-body-bold">
+                                    {message.storyContext.authorName}
+                                  </p>
+                                  <p className="truncate text-xs text-muted-foreground">
+                                    {message.storyContext.caption || "Story sem legenda"}
+                                  </p>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Resposta a um story indisponível.
+                              </p>
+                            )}
+                          </div>
+                        ) : null}
                         {message.text ? <p>{message.text}</p> : null}
 
                         {message.mediaUrl ? (
@@ -1111,7 +1462,12 @@ const Messages = () => {
                         ) : null}
 
                         <div className="mt-2 flex items-center justify-between gap-2">
-                          <p className={`text-[10px] ${isMine ? "text-primary-foreground/70" : "text-muted-foreground"}`}>{message.timestamp}</p>
+                          <p
+                            className="text-[10px]"
+                            style={{ color: isMine ? hexToRgba(bubbleTextColor, 0.72) : hexToRgba(bubbleAccentColor, 0.9) }}
+                          >
+                            {message.timestamp}
+                          </p>
                           <Popover>
                             <PopoverTrigger asChild>
                               <button
@@ -1148,6 +1504,219 @@ const Messages = () => {
                 ) : null}
                 <div ref={messagesEndRef} />
               </div>
+
+              {datePanelOpen ? (
+                <div className="relative z-10 flex max-h-80 flex-col border-t border-white/10 bg-card/95 backdrop-blur-md">
+                  {/* Header */}
+                  <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
+                    <p className="text-sm font-heading text-foreground">Onde se encontrar?</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDateRadiusSheetOpen(true)}
+                        className="rounded-full bg-accent/60 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-accent"
+                      >
+                        {dateRadiusKm} km
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDatePanelOpen(false)}
+                        className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label="Fechar painel de sugestões"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Controls: search + category chips */}
+                  <div className="shrink-0 space-y-2 border-b border-white/10 px-3 py-2">
+                    {/* Search by name row */}
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void handleSuggestDate(
+                          dateRadiusKm,
+                          selectedCategories.length ? selectedCategories : undefined,
+                          dateNameQuery.trim() || undefined,
+                        );
+                      }}
+                      className="flex gap-1.5"
+                    >
+                      <div className="flex flex-1 items-center gap-2 rounded-xl border border-white/10 bg-accent/40 px-3 py-1.5">
+                        <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <input
+                          type="text"
+                          placeholder="Buscar por nome (ex: sushi, pizzaria...)"
+                          value={dateNameQuery}
+                          onChange={(e) => setDateNameQuery(e.target.value)}
+                          className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                        />
+                        {dateNameQuery ? (
+                          <button
+                            type="button"
+                            onClick={() => setDateNameQuery("")}
+                            className="text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                      </div>
+                      <Button
+                        type="submit"
+                        size="sm"
+                        disabled={isLoadingSuggestions}
+                        className="shrink-0"
+                      >
+                        {isLoadingSuggestions ? (
+                          <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Search className="h-3.5 w-3.5" />
+                        )}
+                        <span className="ml-1.5 hidden sm:inline">Pesquisar</span>
+                      </Button>
+                    </form>
+
+                    {/* Category chips */}
+                    {allDateCategories.length > 0 ? (
+                      <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedCategories([]);
+                            void handleSuggestDate(dateRadiusKm, [], dateNameQuery.trim() || undefined);
+                          }}
+                          className={`shrink-0 rounded-full px-3 py-1 text-xs transition-colors ${
+                            selectedCategories.length === 0
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-accent/60 text-muted-foreground hover:bg-accent"
+                          }`}
+                        >
+                          Todos
+                        </button>
+                        {allDateCategories.map((cat) => {
+                          const isSelected = selectedCategories.includes(cat.id);
+                          return (
+                            <button
+                              key={cat.id}
+                              type="button"
+                              onClick={() => {
+                                const next = isSelected
+                                  ? selectedCategories.filter((c) => c !== cat.id)
+                                  : [...selectedCategories, cat.id];
+                                setSelectedCategories(next);
+                                void handleSuggestDate(
+                                  dateRadiusKm,
+                                  next.length ? next : undefined,
+                                  dateNameQuery.trim() || undefined,
+                                );
+                              }}
+                              className={`shrink-0 rounded-full px-3 py-1 text-xs transition-colors ${
+                                isSelected
+                                  ? "bg-primary text-primary-foreground"
+                                  : "bg-accent/60 text-muted-foreground hover:bg-accent"
+                              }`}
+                            >
+                              {cat.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+
+                    {!hasRequestedDateSuggestions ? (
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        disabled={isLoadingSuggestions}
+                        onClick={() => void handleSuggestDate(
+                          dateRadiusKm,
+                          selectedCategories.length ? selectedCategories : undefined,
+                          dateNameQuery.trim() || undefined // <- Adicione este parâmetro
+                        )}
+                      >
+                        {isLoadingSuggestions ? (
+                          <><LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin" />Buscando...</>
+                        ) : (
+                          <><MapPinned className="mr-2 h-3.5 w-3.5" />Buscar lugares</>
+                        )}
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  {/* Results */}
+                  <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+                    {isLoadingSuggestions ? (
+                      <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
+                        <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                        Buscando lugares perto de você...
+                      </div>
+                    ) : null}
+
+                    {hasRequestedDateSuggestions && !isLoadingSuggestions && filteredDateSuggestions.length === 0 ? (
+                      <div className="py-4 text-center text-sm text-muted-foreground">
+                        Nenhum lugar encontrado. Tente outro nome, aumente o raio ou mude os filtros.
+                      </div>
+                    ) : null}
+
+                    {filteredDateSuggestions.map((suggestion) => (
+                      <div key={`${suggestion.name}-${suggestion.mapsUrl}`}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedSuggestion(
+                            selectedSuggestion?.mapsUrl === suggestion.mapsUrl ? null : suggestion,
+                          )}
+                          className={`w-full rounded-2xl border p-3 text-left transition-colors ${
+                            selectedSuggestion?.mapsUrl === suggestion.mapsUrl
+                              ? "border-primary bg-primary/10"
+                              : "border-white/10 bg-accent/30 hover:bg-accent/50"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate font-body-bold text-foreground">{suggestion.name}</p>
+                              {suggestion.vicinity ? (
+                                <p className="truncate text-xs text-muted-foreground">{suggestion.vicinity}</p>
+                              ) : null}
+                              <p className="mt-0.5 text-xs text-primary">
+                                {suggestion.distanceKm} km
+                                {suggestion.rating ? ` · ★ ${suggestion.rating}` : ""}
+                              </p>
+                            </div>
+                            <MapPinned className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                          </div>
+                        </button>
+
+                        {selectedSuggestion?.mapsUrl === suggestion.mapsUrl ? (
+                          <div className="mt-1 rounded-2xl border border-white/10 bg-background/35 px-3 py-3">
+                            <a
+                              href={suggestion.mapsUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="mb-2 block text-xs font-body-bold text-primary hover:underline"
+                            >
+                              Abrir no Google Maps
+                            </a>
+                            <Button
+                              size="sm"
+                              className="w-full"
+                              disabled={isSendingDateSuggestion}
+                              onClick={() => void handleSendDateSuggestion(suggestion)}
+                            >
+                              {isSendingDateSuggestion ? (
+                                <LoaderCircle className="mr-2 h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <MapPinned className="mr-2 h-3.5 w-3.5" />
+                              )}
+                              {isSendingDateSuggestion ? "Enviando..." : "Sugerir este lugar no chat"}
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               <div className="relative z-20 border-t border-white/10 bg-card/95 p-3 backdrop-blur-md">
                 {pendingAttachment ? (
@@ -1221,7 +1790,8 @@ const Messages = () => {
                     onClick={() => void handleSend()}
                     disabled={(!newMessage.trim() && !pendingAttachment) || isSending}
                     aria-label="Enviar mensagem"
-                    className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground transition-all hover:bg-primary/90 active:scale-95 disabled:opacity-50"
+                    className="flex h-10 w-10 items-center justify-center rounded-full transition-all active:scale-95 disabled:opacity-50"
+                    style={{ backgroundColor: currentUserAccentColor, color: currentUserTextColor }}
                   >
                     <Send className="h-4 w-4" />
                   </button>
@@ -1235,6 +1805,40 @@ const Messages = () => {
           )}
         </div>
       </div>
+
+      <Dialog open={readinessNotificationOpen} onOpenChange={setReadinessNotificationOpen}>
+        <DialogContent className="border-white/10 bg-card sm:max-w-sm">
+          <div className="space-y-4 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full date-ready-btn">
+              <MapPinned className="h-7 w-7 text-white" />
+            </div>
+            <div>
+              <p className="font-heading text-lg text-foreground">Hora de sugerir um date!</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Vocês já conversaram bastante — que tal propor um encontro?
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setReadinessNotificationOpen(false)}
+              >
+                Agora não
+              </Button>
+              <Button
+                className="flex-1"
+                onClick={() => {
+                  setReadinessNotificationOpen(false);
+                  setDatePanelOpen(true);
+                }}
+              >
+                Ver sugestões
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <ReportUserDialog
         isOpen={reportOpen}
@@ -1282,41 +1886,65 @@ const Messages = () => {
                   </div>
                 </div>
                 {activeStoryGroup.source === "matches" ? (
-                  <div className="flex gap-2">
-                    {QUICK_REACTIONS.map((emoji) => (
-                      <Button
-                        key={`story-${emoji}`}
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={async () => {
-                          try {
-                            const reaction = await reactToStory(activeStoryItem.id, emoji);
-                            setMatchStories((current) =>
-                              current.map((story) =>
-                                story.id === activeStoryItem.id
-                                  ? {
-                                      ...story,
-                                      reactions: [
-                                        ...story.reactions.filter((item) => item.userName !== reaction.userName),
-                                        reaction,
-                                      ],
-                                    }
-                                  : story,
-                              ),
-                            );
-                          } catch (error) {
-                            toast({
-                              title: "Não foi possível reagir ao story",
-                              description: error instanceof Error ? error.message : "Tente novamente.",
-                              variant: "destructive",
-                            });
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      {QUICK_REACTIONS.map((emoji) => (
+                        <Button
+                          key={`story-${emoji}`}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={async () => {
+                            try {
+                              const reaction = await reactToStory(activeStoryItem.id, emoji);
+                              setMatchStories((current) =>
+                                current.map((story) =>
+                                  story.id === activeStoryItem.id
+                                    ? {
+                                        ...story,
+                                        reactions: [
+                                          ...story.reactions.filter((item) => item.userName !== reaction.userName),
+                                          reaction,
+                                        ],
+                                      }
+                                    : story,
+                                ),
+                              );
+                            } catch (error) {
+                              toast({
+                                title: "Não foi possível reagir ao story",
+                                description: error instanceof Error ? error.message : "Tente novamente.",
+                                variant: "destructive",
+                              });
+                            }
+                          }}
+                        >
+                          {emoji}
+                        </Button>
+                      ))}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        aria-label="Responder ao story"
+                        placeholder="Responder ao story..."
+                        value={storyReplyText}
+                        onChange={(event) => setStoryReplyText(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" && !event.shiftKey) {
+                            event.preventDefault();
+                            void handleReplyToStory();
                           }
                         }}
+                        className="border-white/10 bg-background/40 text-sm"
+                      />
+                      <Button
+                        type="button"
+                        onClick={() => void handleReplyToStory()}
+                        disabled={!storyReplyText.trim() || isReplyingToStory}
                       >
-                        {emoji}
+                        Responder
                       </Button>
-                    ))}
+                    </div>
                   </div>
                 ) : null}
               </div>

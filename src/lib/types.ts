@@ -39,6 +39,15 @@ export interface AppStory {
   reactions: AppStoryReaction[];
 }
 
+export interface AppStoryContext {
+  id: number;
+  authorId: number;
+  authorName: string;
+  mediaType: "image" | "video";
+  mediaUrl: string | null;
+  caption: string;
+}
+
 export interface AppPhoto {
   id: number;
   url: string;
@@ -72,6 +81,7 @@ export interface AppUserProfile {
   interests: string[];
   photos: string[];
   online: boolean;
+  accentColor: string;
   verified?: boolean;
   relationshipIntent?: string;
   spotifyTrack?: AppSpotifyTrack | null;
@@ -85,6 +95,7 @@ export interface ProfileStats {
 
 export interface AppProfile extends AppUserProfile {
   uuid: string;
+  premiumTier: string;
   course: string;
   locationCity: string;
   locationState: string;
@@ -93,7 +104,6 @@ export interface AppProfile extends AppUserProfile {
   showAge: boolean;
   allowVideoCalls: boolean;
   allowDateSuggestions: boolean;
-  allowStudyMatch: boolean;
   invisibleMode: boolean;
   relationshipIntent: string;
   spotifyTrack: AppSpotifyTrack | null;
@@ -119,7 +129,6 @@ export interface ProfileFormValues {
   showAge: boolean;
   allowVideoCalls: boolean;
   allowDateSuggestions: boolean;
-  allowStudyMatch: boolean;
   invisibleMode: boolean;
 }
 
@@ -140,11 +149,13 @@ export interface AppMessage {
   timestamp: string;
   read: boolean;
   isMine: boolean;
-  type?: "text" | "image" | "video" | "story_reply";
+  type?: "text" | "image" | "video" | "story_reply" | "date_suggestion";
+  providerPayload?: Record<string, unknown> | null;
   mediaUrl?: string | null;
   isViewOnce?: boolean;
   consumedAt?: string | null;
   storyId?: number | null;
+  storyContext?: AppStoryContext | null;
   replyToMessageId?: string | null;
   reactions?: Array<{ id: number; emoji: string; userName: string }>;
 }
@@ -225,4 +236,12 @@ export interface DateSuggestion {
   mapsUrl: string;
   latitude: number;
   longitude: number;
+}
+
+export interface DateReadiness {
+  ready: boolean;
+  messageCount: number;
+  detectedInterests: string[];
+  suggestedCategories: string[];
+  categoryLabels: string[];
 }

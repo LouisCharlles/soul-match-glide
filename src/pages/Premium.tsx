@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { Check, Crown, Heart, Shield, Sparkles, Zap } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { fetchMyProfile, fetchMySubscriptions, fetchPremiumPlans, fetchWallet } from "@/lib/api";
+import PaymentModal from "@/components/PaymentModal";
 import type { AppPremiumPlan, AppSubscription, AppWallet } from "@/lib/types";
 
 const currencyFormatter = new Intl.NumberFormat("pt-BR", {
@@ -12,13 +12,13 @@ const currencyFormatter = new Intl.NumberFormat("pt-BR", {
 });
 
 const Premium = () => {
-  const navigate = useNavigate();
   const [plans, setPlans] = useState<AppPremiumPlan[]>([]);
   const [subscriptions, setSubscriptions] = useState<AppSubscription[]>([]);
   const [wallet, setWallet] = useState<AppWallet | null>(null);
   const [premiumTier, setPremiumTier] = useState("free");
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  const [paymentModalPlanId, setPaymentModalPlanId] = useState<number | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -66,7 +66,7 @@ const Premium = () => {
     [subscriptions],
   );
 
-  return (
+  return <>
     <section className="space-y-6 pb-8">
       <div className="rounded-[2rem] border border-white/10 bg-gradient-to-br from-primary/20 via-card to-yellow-700/10 p-6">
         <div className="flex items-center gap-3">
@@ -123,7 +123,7 @@ const Premium = () => {
       {isLoading ? (
         <div className="text-sm text-muted-foreground font-body">Carregando planos...</div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div>
           {plans.map((plan) => (
             <div key={plan.id} className="card-surface p-5 space-y-4">
               <div>
@@ -154,7 +154,7 @@ const Premium = () => {
               <Button
                 className="w-full"
                 disabled={activeSubscription?.plan.id === plan.id}
-                onClick={() => navigate(`/app/payment?plan=${plan.id}`)}
+                onClick={() => setPaymentModalPlanId(plan.id)}
               >
                 {activeSubscription?.plan.id === plan.id ? "Plano atual" : `Assinar ${plan.name}`}
               </Button>
@@ -177,7 +177,13 @@ const Premium = () => {
         </ul>
       </div>
     </section>
-  );
+
+    <PaymentModal
+      isOpen={paymentModalPlanId !== null}
+      onClose={() => setPaymentModalPlanId(null)}
+      selectedPlanId={paymentModalPlanId}
+    />
+  </>;
 };
 
 export default Premium;

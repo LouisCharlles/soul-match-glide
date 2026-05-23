@@ -20,12 +20,14 @@ import Premium from "./pages/Premium";
 import Payment from "./pages/Payment";
 import CurrencyWallet from "./pages/CurrencyWallet";
 import Likes from "./pages/Likes";
-import WatchVideos from "./pages/WatchVideos";
+// HIDDEN: WatchVideos page — aguardando configuração do Ad Manager/AdSense para habilitar
+// import WatchVideos from "./pages/WatchVideos";
 import Discover from "./pages/Discover";
 import Messages from "./pages/Messages";
 import Profile from "./pages/Profile";
 import ProfileSetup from "./pages/ProfileSetup";
 import NotFound from "./pages/NotFound";
+import VerifyIdentity from "./pages/VerifyIdentity";
 
 const queryClient = new QueryClient();
 
@@ -45,6 +47,7 @@ const App = () => (
             <Route path="/reset-password/:userId/:token" element={<ResetPassword />} />
             <Route element={<ProtectedRoute />}>
               <Route path="/app/profile-setup" element={<ProfileSetup />} />
+              <Route path="/app/verify" element={<VerifyIdentity />} />
               <Route element={<ProfileCompletionRoute />}>
                 <Route path="/app" element={<MainLayout />}>
                   <Route index element={<Discover />} />
@@ -56,7 +59,8 @@ const App = () => (
                   <Route path="payment" element={<Payment />} />
                   <Route path="currency" element={<CurrencyWallet />} />
                   <Route path="likes" element={<Likes />} />
-                  <Route path="watch-videos" element={<WatchVideos />} />
+                  {/* HIDDEN: rota de vídeos premiados — reativar após configurar Ad Manager
+                  <Route path="watch-videos" element={<WatchVideos />} /> */}
                 </Route>
               </Route>
             </Route>

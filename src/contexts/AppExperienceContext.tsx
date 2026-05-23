@@ -1,11 +1,13 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
+import { fetchWallet } from "@/lib/api";
 
 type AppLanguage = "pt-BR" | "en-US";
 type GenderFilter = "all" | "male" | "female" | "non_binary";
@@ -46,6 +48,7 @@ interface ExperienceState {
   grantPremium: () => void;
   incrementSwipeCount: () => boolean;
   setCustomization: (customization: Partial<ProfileCustomization>) => void;
+  refreshWallet: () => Promise<void>;
 }
 
 const STORAGE_KEY = "bonding_app_experience";
@@ -140,6 +143,20 @@ function loadState(): StoredState {
 
 export function AppExperienceProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<StoredState>(loadState);
+
+  const refreshWallet = useCallback(async () => {
+    try {
+      const wallet = await fetchWallet();
+      setState((current) => ({
+        ...current,
+        ribbons: wallet.ribbons,
+        hearts: wallet.hearts,
+        rewindsAvailable: wallet.rewinds,
+      }));
+    } catch {
+      // silently fail — offline or unauthenticated
+    }
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -242,17 +259,16 @@ export function AppExperienceProvider({ children }: { children: ReactNode }) {
         return { success: true, message: "Rewind liberado pelo premium." };
       }
 
-      if (state.hearts <= 0) {
-        return { success: false, message: "Você precisa de um coração ou premium para voltar mais de uma vez." };
+      if (state.ribbons < 25) {
+        return { success: false, message: "Você precisa de 25 laços para reverter." };
       }
 
       setState((current) => ({
         ...current,
-        hearts: current.hearts - 1,
-        rewindsAvailable: current.rewindsAvailable + 2,
+        ribbons: current.ribbons - 25,
       }));
 
-        return { success: true, message: "Você trocou 1 coração por 2 rewinds." };
+        return { success: true, message: "25 laços usados para reverter." };
       },
       grantPremium: () => setState((current) => ({
         ...current,
@@ -279,8 +295,9 @@ export function AppExperienceProvider({ children }: { children: ReactNode }) {
           ...customization,
         },
       })),
+      refreshWallet,
     };
-  }, [state]);
+  }, [state, refreshWallet]);
 
   return (
     <AppExperienceContext.Provider value={value}>

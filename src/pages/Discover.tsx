@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence } from "framer-motion";
 import { AlertCircle, Flag, X, Heart, Star, RotateCcw } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdCard } from "@/components/AdCard";
 import ProfileCard from "@/components/ProfileCard";
 import MatchModal from "@/components/MatchModal";
@@ -9,7 +10,7 @@ import ReportUserDialog from "@/components/ReportUserDialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
 import { useAppExperience } from "@/contexts/AppExperienceContext";
-import { createConnection, fetchDiscoverProfiles } from "@/lib/api";
+import { createConnection, fetchDiscoverProfiles, undoLastConnection } from "@/lib/api";
 import type { AppUserProfile } from "@/lib/types";
 
 const Discover = () => {
@@ -19,12 +20,19 @@ const Discover = () => {
     discoveryFilters,
     incrementSwipeCount,
     registerDailyLikeReward,
+    refreshWallet,
   } = useAppExperience();
+  const queryClient = useQueryClient();
+  const { data: fetchedProfiles, isLoading, isError, error: queryError } = useQuery({
+    queryKey: ["profiles", "discover"],
+    queryFn: fetchDiscoverProfiles,
+    staleTime: 30_000,
+  });
+
   const [profiles, setProfiles] = useState<AppUserProfile[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [matchUser, setMatchUser] = useState<AppUserProfile | null>(null);
   const [showMatch, setShowMatch] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [isSubmittingSwipe, setIsSubmittingSwipe] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [reportTarget, setReportTarget] = useState<AppUserProfile | null>(null);
@@ -32,38 +40,19 @@ const Discover = () => {
   const [matchedConnectionId, setMatchedConnectionId] = useState<string | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
+    if (fetchedProfiles) {
+      setProfiles(fetchedProfiles);
+      setCurrentIndex(0);
+    }
+  }, [fetchedProfiles]);
 
-    const loadProfiles = async () => {
-      try {
-        const nextProfiles = await fetchDiscoverProfiles();
-        if (isMounted) {
-          setProfiles(nextProfiles);
-          setErrorMessage("");
-        }
-      } catch (error) {
-        if (isMounted) {
-          const message = error instanceof Error ? error.message : "Tente novamente em instantes.";
-          setErrorMessage(message);
-          toast({
-            title: "Não foi possível carregar perfis",
-            description: message,
-            variant: "destructive",
-          });
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    void loadProfiles();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [toast]);
+  useEffect(() => {
+    if (isError && queryError) {
+      const message = queryError instanceof Error ? queryError.message : "Tente novamente em instantes.";
+      setErrorMessage(message);
+      toast({ title: "Não foi possível carregar perfis", description: message, variant: "destructive" });
+    }
+  }, [isError, queryError, toast]);
 
   const filteredProfiles = useMemo(() => profiles.filter((profile) => {
     const matchesAge = profile.age >= discoveryFilters.minAge && profile.age <= discoveryFilters.maxAge;
@@ -110,6 +99,7 @@ const Discover = () => {
             description: reward.message,
           });
         }
+        void refreshWallet();
       }
 
       if (incrementSwipeCount()) {
@@ -118,6 +108,7 @@ const Discover = () => {
 
       setCurrentIndex((prev) => prev + 1);
       setErrorMessage("");
+      void queryClient.invalidateQueries({ queryKey: ["profiles", "discover"] });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Tente novamente.";
       setErrorMessage(message);
@@ -129,21 +120,32 @@ const Discover = () => {
     } finally {
       setIsSubmittingSwipe(false);
     }
-  }, [currentIndex, filteredProfiles, incrementSwipeCount, isSubmittingSwipe, registerDailyLikeReward, toast]);
+  }, [currentIndex, filteredProfiles, incrementSwipeCount, isSubmittingSwipe, queryClient, refreshWallet, registerDailyLikeReward, toast]);
 
-  const handleUndo = () => {
-    toast({
-      title: "Desfazer ainda não disponível",
-      description: "O backend atual não expõe uma rota para reverter a última interação.",
-    });
-  };
+  const [isUndoing, setIsUndoing] = useState(false);
+
+  const handleUndo = useCallback(async () => {
+    if (isSubmittingSwipe || isUndoing) return;
+    setIsUndoing(true);
+    try {
+      const result = await undoLastConnection();
+      setProfiles((prev) => [result.profile, ...prev]);
+      setCurrentIndex((prev) => Math.max(0, prev - 1));
+      await refreshWallet();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Não foi possível reverter.";
+      toast({ title: "Não foi possível reverter", description: message, variant: "destructive" });
+    } finally {
+      setIsUndoing(false);
+    }
+  }, [isSubmittingSwipe, isUndoing, refreshWallet, toast]);
 
   const visibleProfiles = filteredProfiles.slice(currentIndex, currentIndex + 3);
   const allSwiped = currentIndex >= filteredProfiles.length;
   const currentProfile = filteredProfiles[currentIndex] ?? null;
 
   return (
-    <section className="flex flex-col items-center gap-4 h-[calc(100dvh-10rem)] md:h-[calc(100dvh-8rem)]" aria-labelledby="discover-heading">
+    <section className="flex h-[calc(100dvh-8.5rem)] flex-col items-center gap-2 md:h-[calc(100dvh-8rem)] md:gap-4" aria-labelledby="discover-heading">
       <div className="sr-only" aria-live="polite">
         {isLoading ? "Carregando perfis para descoberta." : currentProfile ? `Mostrando o perfil de ${currentProfile.name}.` : "Nenhum perfil disponível no momento."}
       </div>
@@ -159,14 +161,15 @@ const Discover = () => {
 
       <div className="relative w-full max-w-sm md:max-w-lg xl:max-w-xl flex-1 min-h-0">
         {isLoading ? (
-          <div className="flex h-full items-center justify-center text-sm font-body text-muted-foreground" role="status" aria-live="polite">
-            Carregando perfis...
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-center" role="status" aria-live="polite">
+            <div className="h-8 w-8 rounded-full animate-glow-pulse" style={{ background: "var(--gradient-brand)" }} />
+            <p className="text-sm font-body text-muted-foreground">Buscando pessoas por aí...</p>
           </div>
         ) : allSwiped ? (
-          <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
-            <Heart className="h-16 w-16 text-muted-foreground" />
-            <p className="text-muted-foreground font-heading text-lg">Sem mais perfis por agora</p>
-            <p className="text-muted-foreground/60 font-body text-sm">Volte mais tarde para novas conexões</p>
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-center animate-fade-in">
+            <div className="text-5xl">👀</div>
+            <p className="font-heading text-xl text-foreground">Tamo averiguando a resenha!</p>
+            <p className="text-muted-foreground/70 font-body text-sm max-w-xs">Volte mais tarde — o campus vai te trazer novas conexões.</p>
           </div>
         ) : (
           <AnimatePresence>
@@ -186,44 +189,59 @@ const Discover = () => {
 
       {/* Action Buttons */}
       {!allSwiped && (
-        <div className="flex items-center gap-4 pb-24 md:pb-6" aria-label="Ações do perfil atual">
+        <div className="flex items-center gap-3 pb-10 md:gap-4 md:pb-6" aria-label="Ações do perfil atual">
+          {/* Denunciar */}
           <button
             onClick={() => setReportTarget(currentProfile)}
             disabled={!currentProfile}
             aria-label={currentProfile ? `Denunciar o perfil de ${currentProfile.name}` : "Denunciar perfil"}
-            className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-white/20 text-muted-foreground transition-all hover:scale-110 active:scale-95 hover:bg-white/5 disabled:opacity-50"
+            className="flex h-12 w-12 items-center justify-center rounded-full border border-white/15 text-muted-foreground/70 transition-all hover:scale-110 active:scale-95 hover:border-white/25 hover:bg-white/5 hover:text-muted-foreground disabled:opacity-40"
           >
-            <Flag className="h-5 w-5" />
+            <Flag className="h-4 w-4" />
           </button>
+
+          {/* Desfazer */}
           <button
-            onClick={handleUndo}
-            disabled={isSubmittingSwipe}
+            onClick={() => void handleUndo()}
+            disabled={isSubmittingSwipe || isUndoing}
             aria-label="Desfazer última ação"
-            className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-warning text-warning transition-all hover:scale-110 active:scale-95 hover:bg-warning/10"
+            className="flex h-12 w-12 items-center justify-center rounded-full border-2 text-warning transition-all hover:scale-110 active:scale-95"
+            style={{ borderColor: "rgba(251,191,36,0.5)", color: "#FBBF24" }}
           >
             <RotateCcw className="h-5 w-5" />
           </button>
+
+          {/* Passar / X */}
           <button
             onClick={() => void handleSwipe("left")}
             disabled={isSubmittingSwipe}
             aria-label="Passar perfil"
-            className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-destructive text-destructive transition-all hover:scale-110 active:scale-95 hover:bg-destructive/10"
+            className="flex h-14 w-14 items-center justify-center rounded-full border-2 border-destructive/60 text-destructive transition-all hover:scale-110 active:scale-95 hover:bg-destructive/10"
           >
-            <X className="h-7 w-7" />
+            <X className="h-6 w-6" />
           </button>
+
+          {/* Like — botão principal com gradiente */}
           <button
             onClick={() => void handleSwipe("right")}
             disabled={isSubmittingSwipe}
             aria-label="Curtir perfil"
-            className="flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground transition-all hover:scale-110 active:scale-95 shadow-lg"
+            className="flex h-16 w-16 items-center justify-center rounded-full text-white transition-all hover:scale-110 active:scale-95 disabled:opacity-60"
+            style={{
+              background: "var(--gradient-brand)",
+              boxShadow: "var(--glow-brand)",
+            }}
           >
-            <Heart className="h-7 w-7" fill="currentColor" />
+            <Heart className="h-8 w-8" fill="currentColor" />
           </button>
+
+          {/* Super like */}
           <button
             onClick={() => void handleSwipe("superlike")}
             disabled={isSubmittingSwipe}
             aria-label="Dar super like"
-            className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-warning text-warning transition-all hover:scale-110 active:scale-95 hover:bg-warning/10"
+            className="flex h-12 w-12 items-center justify-center rounded-full border-2 transition-all hover:scale-110 active:scale-95"
+            style={{ borderColor: "#3B9DF2", color: "#3B9DF2" }}
           >
             <Star className="h-5 w-5" />
           </button>

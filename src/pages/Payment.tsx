@@ -1,136 +1,60 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { CheckCircle2, CreditCard, Landmark, LoaderCircle, QrCode } from "lucide-react";
+import { CheckCircle2, Copy, CreditCard, ExternalLink, Landmark, LoaderCircle, QrCode } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { createStripePaymentIntent, fetchPremiumPlans } from "@/lib/api";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { createAbacatePayBilling, createAbacatePayPix, fetchMyProfile, fetchPremiumPlans } from "@/lib/api";
+import { useAppExperience } from "@/contexts/AppExperienceContext";
 import type { AppPremiumPlan } from "@/lib/types";
-
-const STRIPE_PUBLISHABLE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY?.trim() || "";
+import QRCode from "react-qr-code";
 
 const paymentMethodMeta = {
-  credit: {
-    title: "Cartão de crédito",
-    icon: CreditCard,
-    description: "Checkout real com Stripe Payment Element.",
-  },
-  debit: {
-    title: "Cartão de débito",
-    icon: Landmark,
-    description: "Usa o mesmo Payment Element e mostra os meios suportados pela sua conta Stripe.",
-  },
-  pix: {
-    title: "Pix",
-    icon: QrCode,
-    description: "Quando habilitado na conta Stripe, o Payment Element também expõe Pix aqui.",
-  },
+  credit: { title: "Cartão de crédito", icon: CreditCard },
+  debit: { title: "Cartão de débito", icon: Landmark },
+  pix: { title: "Pix", icon: QrCode },
 } as const;
 
 type PaymentMethod = keyof typeof paymentMethodMeta;
 
-type StripeInstance = {
-  elements: (options: { clientSecret: string; appearance?: Record<string, unknown> }) => StripeElementsInstance;
-  confirmPayment: (options: {
-    elements: StripeElementsInstance;
-    confirmParams?: { return_url?: string };
-    redirect?: "always" | "if_required";
-  }) => Promise<{ error?: { message?: string }; paymentIntent?: { status?: string } }>;
-};
+const currencyFormatter = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
-type StripeElementsInstance = {
-  create: (type: "payment", options?: Record<string, unknown>) => StripeElementInstance;
-};
-
-type StripeElementInstance = {
-  mount: (selectorOrElement: string | HTMLElement) => void;
-  destroy: () => void;
-};
-
-declare global {
-  interface Window {
-    Stripe?: (publishableKey: string) => StripeInstance;
-  }
+function formatCpf(value: string) {
+  return value.replace(/\D/g, "").slice(0, 11);
 }
-
-let stripeScriptLoader: Promise<void> | null = null;
-
-function loadStripeJs() {
-  if (!STRIPE_PUBLISHABLE_KEY) {
-    return Promise.reject(new Error("VITE_STRIPE_PUBLISHABLE_KEY não configurada."));
-  }
-
-  if (typeof window !== "undefined" && window.Stripe) {
-    return Promise.resolve();
-  }
-
-  if (!stripeScriptLoader) {
-    stripeScriptLoader = new Promise<void>((resolve, reject) => {
-      const script = document.createElement("script");
-      script.src = "https://js.stripe.com/v3/";
-      script.async = true;
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error("Não foi possível carregar o Stripe.js."));
-      document.head.appendChild(script);
-    });
-  }
-
-  return stripeScriptLoader;
-}
-
-const currencyFormatter = new Intl.NumberFormat("pt-BR", {
-  style: "currency",
-  currency: "BRL",
-});
 
 const Payment = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const elementContainerRef = useRef<HTMLDivElement>(null);
-  const elementInstanceRef = useRef<StripeElementInstance | null>(null);
-  const stripeRef = useRef<StripeInstance | null>(null);
-  const elementsRef = useRef<StripeElementsInstance | null>(null);
+  const { grantPremium, refreshWallet } = useAppExperience();
 
   const [plans, setPlans] = useState<AppPremiumPlan[]>([]);
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod>("credit");
+  const [cpf, setCpf] = useState("");
   const [isLoading, setIsLoading] = useState(true);
-  const [isCreatingIntent, setIsCreatingIntent] = useState(false);
-  const [isConfirmingPayment, setIsConfirmingPayment] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
+  const [pixData, setPixData] = useState<{ qrImage: string; code: string } | null>(null);
+  const [isPixPolling, setIsPixPolling] = useState(false);
+  const pixPollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const planId = Number(searchParams.get("plan"));
 
   useEffect(() => {
     let isMounted = true;
+    fetchPremiumPlans()
+      .then((nextPlans) => { if (isMounted) { setPlans(nextPlans); setErrorMessage(""); } })
+      .catch((error) => { if (isMounted) setErrorMessage(error instanceof Error ? error.message : "Não foi possível carregar os planos."); })
+      .finally(() => { if (isMounted) setIsLoading(false); });
+    return () => { isMounted = false; };
+  }, []);
 
-    const loadPlans = async () => {
-      try {
-        const nextPlans = await fetchPremiumPlans();
-        if (!isMounted) {
-          return;
-        }
-
-        setPlans(nextPlans);
-        setErrorMessage("");
-      } catch (error) {
-        if (!isMounted) {
-          return;
-        }
-
-        setErrorMessage(error instanceof Error ? error.message : "Não foi possível carregar os planos.");
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-      }
-    };
-
-    void loadPlans();
-
+  useEffect(() => {
     return () => {
-      isMounted = false;
+      if (pixPollingRef.current) clearInterval(pixPollingRef.current);
     };
   }, []);
 
@@ -139,109 +63,64 @@ const Payment = () => {
     [planId, plans],
   );
 
-  const mountPaymentElement = async (nextClientSecret: string) => {
-    await loadStripeJs();
-
-    if (!window.Stripe || !elementContainerRef.current) {
-      throw new Error("Stripe.js não ficou disponível no navegador.");
-    }
-
-    elementInstanceRef.current?.destroy();
-    elementContainerRef.current.innerHTML = "";
-
-    const stripe = window.Stripe(STRIPE_PUBLISHABLE_KEY);
-    const elements = stripe.elements({
-      clientSecret: nextClientSecret,
-      appearance: {
-        theme: "night",
-        variables: {
-          colorPrimary: "#d71d29",
-          colorBackground: "#101114",
-          colorText: "#f7f7f8",
-          colorDanger: "#ef4444",
-          borderRadius: "18px",
-        },
-      },
-    });
-
-    const paymentElement = elements.create("payment", {
-      layout: "tabs",
-      defaultValues: {
-        billingDetails: {
-          name: "",
-        },
-      },
-    });
-    paymentElement.mount(elementContainerRef.current);
-
-    stripeRef.current = stripe;
-    elementsRef.current = elements;
-    elementInstanceRef.current = paymentElement;
-  };
-
-  const startPayment = async () => {
-    if (!selectedPlan || isCreatingIntent) {
-      return;
-    }
-
-    setIsCreatingIntent(true);
+  const startCardPayment = async () => {
+    if (!selectedPlan || isProcessing) return;
+    setIsProcessing(true);
     setSuccessMessage("");
+    setErrorMessage("");
     try {
-      const response = await createStripePaymentIntent(selectedPlan.id);
-      setClientSecret(response.client_secret);
-      await mountPaymentElement(response.client_secret);
-      setErrorMessage("");
+      const result = await createAbacatePayBilling(selectedPlan.id, cpf);
+      window.open(result.checkout_url, "_blank", "noopener,noreferrer");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Não foi possível criar o pagamento.");
+      setErrorMessage(error instanceof Error ? error.message : "Não foi possível iniciar o checkout.");
     } finally {
-      setIsCreatingIntent(false);
+      setIsProcessing(false);
     }
   };
 
-  const confirmPayment = async () => {
-    if (!stripeRef.current || !elementsRef.current || isConfirmingPayment) {
+  const startPixPayment = async () => {
+    if (!selectedPlan || isProcessing) return;
+    if (cpf.length !== 11) {
+      setErrorMessage("Informe um CPF válido (11 dígitos) para continuar.");
       return;
     }
-
-    setIsConfirmingPayment(true);
+    setIsProcessing(true);
+    setSuccessMessage("");
+    setErrorMessage("");
     try {
-      const result = await stripeRef.current.confirmPayment({
-        elements: elementsRef.current,
-        confirmParams: {
-          return_url: `${window.location.origin}/app/premium?checkout=success`,
-        },
-        redirect: "if_required",
-      });
-
-      if (result.error?.message) {
-        throw new Error(result.error.message);
-      }
-
-      if (result.paymentIntent?.status === "succeeded" || result.paymentIntent?.status === "processing") {
-        setSuccessMessage("Pagamento iniciado com sucesso. O Stripe já recebeu a confirmação desta cobrança.");
-      } else {
-        setSuccessMessage("O pagamento foi enviado ao Stripe. A confirmação final pode depender do método escolhido.");
-      }
-      setErrorMessage("");
+      const result = await createAbacatePayPix(selectedPlan.id, cpf);
+      setPixData({ qrImage: result.qr_code_image, code: result.pix_code });
+      setIsPixPolling(true);
+      pixPollingRef.current = setInterval(() => {
+        void fetchMyProfile()
+          .then((profile) => {
+            if (profile.premiumTier !== "free") {
+              if (pixPollingRef.current) clearInterval(pixPollingRef.current);
+              setIsPixPolling(false);
+              grantPremium();
+              void refreshWallet();
+              setSuccessMessage("Pagamento Pix confirmado! Sua assinatura Premium está ativa.");
+            }
+          })
+          .catch(() => undefined);
+      }, 3000);
+      setTimeout(() => {
+        if (pixPollingRef.current) { clearInterval(pixPollingRef.current); pixPollingRef.current = null; }
+        setIsPixPolling(false);
+      }, 10 * 60 * 1000);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Não foi possível confirmar o pagamento.");
+      setErrorMessage(error instanceof Error ? error.message : "Não foi possível gerar o QR Code Pix.");
     } finally {
-      setIsConfirmingPayment(false);
+      setIsProcessing(false);
     }
   };
-
-  useEffect(() => {
-    return () => {
-      elementInstanceRef.current?.destroy();
-    };
-  }, []);
 
   return (
     <section className="space-y-6 pb-8">
       <div>
         <h1 className="font-display text-3xl text-foreground">Pagamento</h1>
         <p className="mt-2 text-sm text-muted-foreground font-body">
-          Checkout real com Stripe Payment Element para cartão e métodos suportados, incluindo Pix quando habilitado.
+          Checkout seguro via AbacatePay — cartão de crédito, débito e Pix.
         </p>
       </div>
 
@@ -255,7 +134,7 @@ const Payment = () => {
       {successMessage ? (
         <Alert className="border-primary/40 bg-primary/5 text-foreground">
           <CheckCircle2 className="h-4 w-4 text-primary" />
-          <AlertTitle>Stripe conectado</AlertTitle>
+          <AlertTitle>Pagamento confirmado</AlertTitle>
           <AlertDescription>{successMessage}</AlertDescription>
         </Alert>
       ) : null}
@@ -273,62 +152,116 @@ const Payment = () => {
             </p>
           </div>
 
-          <Tabs
-            value={selectedMethod}
-            onValueChange={(value) => setSelectedMethod(value as PaymentMethod)}
-            className="space-y-4"
-          >
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="credit">Crédito</TabsTrigger>
-              <TabsTrigger value="debit">Débito</TabsTrigger>
-              <TabsTrigger value="pix">Pix</TabsTrigger>
-            </TabsList>
+          {!pixData && !successMessage ? (
+            <Tabs
+              value={selectedMethod}
+              onValueChange={(v) => { setSelectedMethod(v as PaymentMethod); setErrorMessage(""); }}
+              className="space-y-4"
+            >
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="credit">Crédito</TabsTrigger>
+                <TabsTrigger value="debit">Débito</TabsTrigger>
+                <TabsTrigger value="pix">Pix</TabsTrigger>
+              </TabsList>
 
-            {Object.entries(paymentMethodMeta).map(([method, meta]) => {
-              const Icon = meta.icon;
-              return (
-                <TabsContent key={method} value={method} className="card-surface space-y-4 p-5">
-                  <div className="flex items-center gap-2 text-foreground">
-                    <Icon className="h-4 w-4 text-primary" />
-                    <span className="font-heading">{meta.title}</span>
-                  </div>
-                  <p className="text-sm text-muted-foreground font-body">{meta.description}</p>
-                  <Button className="w-full" onClick={() => void startPayment()} disabled={isCreatingIntent}>
-                    {isCreatingIntent ? "Preparando checkout..." : `Abrir checkout de ${meta.title.toLowerCase()}`}
-                  </Button>
-                </TabsContent>
-              );
-            })}
-          </Tabs>
+              {(["credit", "debit"] as const).map((method) => {
+                const meta = paymentMethodMeta[method];
+                const Icon = meta.icon;
+                return (
+                  <TabsContent key={method} value={method} className="card-surface space-y-4 p-5">
+                    <div className="flex items-center gap-2 text-foreground">
+                      <Icon className="h-4 w-4 text-primary" />
+                      <span className="font-heading">{meta.title}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor={`cpf-${method}`} className="text-sm text-muted-foreground">CPF (opcional)</Label>
+                      <Input
+                        id={`cpf-${method}`}
+                        placeholder="00000000000"
+                        value={cpf}
+                        onChange={(e) => setCpf(formatCpf(e.target.value))}
+                        maxLength={11}
+                        inputMode="numeric"
+                        className="bg-background/60"
+                      />
+                    </div>
+                    <Button className="w-full" onClick={() => void startCardPayment()} disabled={isProcessing}>
+                      {isProcessing ? (
+                        <><LoaderCircle className="mr-2 h-4 w-4 animate-spin" />Abrindo checkout...</>
+                      ) : (
+                        <><ExternalLink className="mr-2 h-4 w-4" />{`Pagar com ${meta.title.toLowerCase()}`}</>
+                      )}
+                    </Button>
+                    <p className="text-xs text-muted-foreground text-center font-body">
+                      Você será redirecionado para a página segura do AbacatePay
+                    </p>
+                  </TabsContent>
+                );
+              })}
 
-          {clientSecret ? (
+              <TabsContent value="pix" className="card-surface space-y-4 p-5">
+                <div className="flex items-center gap-2 text-foreground">
+                  <QrCode className="h-4 w-4 text-primary" />
+                  <span className="font-heading">Pix</span>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="cpf-pix" className="text-sm text-muted-foreground">CPF (obrigatório para Pix)</Label>
+                  <Input
+                    id="cpf-pix"
+                    placeholder="00000000000"
+                    value={cpf}
+                    onChange={(e) => setCpf(formatCpf(e.target.value))}
+                    maxLength={11}
+                    inputMode="numeric"
+                    className="bg-background/60"
+                  />
+                </div>
+                <Button className="w-full" onClick={() => void startPixPayment()} disabled={isProcessing || cpf.length !== 11}>
+                  {isProcessing ? (
+                    <><LoaderCircle className="mr-2 h-4 w-4 animate-spin" />Gerando QR Code...</>
+                  ) : "Gerar QR Code Pix"}
+                </Button>
+              </TabsContent>
+            </Tabs>
+          ) : null}
+
+          {pixData && !successMessage ? (
             <div className="card-surface space-y-4 p-5">
-              <div>
-                <p className="text-xs uppercase tracking-[0.22em] text-muted-foreground">Stripe Payment Element</p>
-                <p className="mt-2 font-heading text-xl text-foreground">Finalize a assinatura</p>
-                <p className="mt-2 text-sm text-muted-foreground font-body">
-                  O formulário abaixo é renderizado pelo Stripe.js usando o client secret real retornado pelo backend.
+              <div className="flex flex-col items-center gap-3">
+                {/* Fundo branco obrigatório para o leitor do banco conseguir ler no Dark Mode! */}
+                <div className="flex h-52 w-52 items-center justify-center rounded-xl bg-white p-4 shadow-sm">
+                  <QRCode
+                    value={pixData.code}
+                    size={180}
+                    style={{ height: "auto", maxWidth: "100%", width: "100%" }}
+                  />
+                </div>
+                <p className="text-sm text-muted-foreground font-body text-center">
+                  Escaneie com o app do seu banco ou copie o código abaixo
                 </p>
+                <div className="w-full rounded-xl border border-white/10 bg-background/60 p-3 flex items-center gap-2">
+                  <code className="flex-1 truncate text-xs text-foreground font-mono">{pixData.code}</code>
+                  <Button size="sm" variant="ghost" onClick={() => void navigator.clipboard.writeText(pixData.code)} className="shrink-0">
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+                {isPixPolling ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground font-body">
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                    Aguardando pagamento...
+                  </div>
+                ) : null}
               </div>
-
-              <div ref={elementContainerRef} className="rounded-3xl border border-white/10 bg-background/60 p-4" />
-
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <Button onClick={() => void confirmPayment()} disabled={isConfirmingPayment}>
-                  {isConfirmingPayment ? (
-                    <>
-                      <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
-                      Confirmando...
-                    </>
-                  ) : (
-                    "Confirmar pagamento"
-                  )}
-                </Button>
-                <Button variant="outline" onClick={() => navigate("/app/premium")}>
-                  Voltar para premium
-                </Button>
-              </div>
+              <Button variant="outline" onClick={() => navigate("/app/premium")} className="w-full">
+                Voltar para premium
+              </Button>
             </div>
+          ) : null}
+
+          {successMessage ? (
+            <Button className="w-full" onClick={() => navigate("/app/premium")}>
+              Voltar para premium
+            </Button>
           ) : null}
         </>
       ) : (

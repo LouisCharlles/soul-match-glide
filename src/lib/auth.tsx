@@ -21,7 +21,7 @@ interface AuthContextValue {
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
   signUp: (payload: SignUpPayload) => Promise<{ registered: boolean; loggedIn: boolean }>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -40,7 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(currentUser);
         }
       } catch {
-        clearStoredTokens();
+        await clearStoredTokens();
         if (isMounted) {
           setUser(null);
         }
@@ -78,8 +78,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const logout = useCallback(() => {
-    clearStoredTokens();
+  const logout = useCallback(async () => {
+    await clearStoredTokens();
     setUser(null);
   }, []);
 

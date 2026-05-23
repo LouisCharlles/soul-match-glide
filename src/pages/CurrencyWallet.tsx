@@ -70,7 +70,8 @@ const CurrencyWallet = () => {
           Os vídeos recompensados e curtidas diárias já alimentam esta carteira pelo backend.
         </p>
         <div className="flex flex-col gap-3 sm:flex-row">
-          <Button onClick={() => navigate("/app/watch-videos")}>Assistir vídeos</Button>
+          {/* HIDDEN: botão de vídeos premiados — reativar após configurar Ad Manager
+          <Button onClick={() => navigate("/app/watch-videos")}>Assistir vídeos</Button> */}
           <Button variant="outline" onClick={() => navigate("/app/premium")}>Ver plano premium</Button>
           <Button variant="ghost" onClick={() => void loadWallet()} disabled={isLoading}>
             Atualizar carteira

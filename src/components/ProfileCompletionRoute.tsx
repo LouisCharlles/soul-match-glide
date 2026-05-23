@@ -49,6 +49,10 @@ const ProfileCompletionRoute = () => {
     return <Navigate to="/app/profile-setup" replace state={{ from: location }} />;
   }
 
+  if (!profile.verified) {
+    return <Navigate to="/app/verify" replace />;
+  }
+
   return <Outlet />;
 };
 
