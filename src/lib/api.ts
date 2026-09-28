@@ -1298,8 +1298,21 @@ export async function rewardVideoWatch() {
   });
 }
 
+interface ApiAbacatePayBillingResult {
+  checkout_url?: string;
+  demo?: boolean;
+  detail?: string;
+}
+
+interface ApiAbacatePayPixResult {
+  pix_code?: string;
+  qr_code_image?: string;
+  demo?: boolean;
+  detail?: string;
+}
+
 export async function createAbacatePayBilling(planId: number, cpf = "") {
-  return request<{ checkout_url: string }>("/payments/intents/", {
+  return request<ApiAbacatePayBillingResult>("/payments/intents/", {
     method: "POST",
     body: { plan_id: planId, method: "card", cpf },
     auth: true,
@@ -1307,7 +1320,7 @@ export async function createAbacatePayBilling(planId: number, cpf = "") {
 }
 
 export async function createAbacatePayPix(planId: number, cpf: string) {
-  return request<{ pix_code: string; qr_code_image: string }>("/payments/intents/", {
+  return request<ApiAbacatePayPixResult>("/payments/intents/", {
     method: "POST",
     body: { plan_id: planId, method: "pix", cpf },
     auth: true,

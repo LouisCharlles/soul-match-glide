@@ -96,7 +96,15 @@ const PaymentModal = ({ isOpen, onClose, selectedPlanId }: PaymentModalProps) =>
     setErrorMessage("");
     try {
       const result = await createAbacatePayPix(selectedPlan.id, cpf);
-      setPixData({ qrImage: result.qr_code_image, code: result.pix_code });
+      if (result.demo) {
+        grantPremium();
+        void refreshWallet();
+        setSuccessMessage(
+          result.detail ?? "Plano ativado em modo demonstração — nenhuma cobrança real foi realizada.",
+        );
+        return;
+      }
+      setPixData({ qrImage: result.qr_code_image ?? "", code: result.pix_code ?? "" });
       setIsPixPolling(true);
       pixPollingRef.current = setInterval(() => {
         void fetchMyProfile()
@@ -132,7 +140,17 @@ const PaymentModal = ({ isOpen, onClose, selectedPlanId }: PaymentModalProps) =>
     setErrorMessage("");
     try {
       const result = await createAbacatePayBilling(selectedPlan.id, cpf);
-      window.open(result.checkout_url, "_blank", "noopener,noreferrer");
+      if (result.demo) {
+        grantPremium();
+        void refreshWallet();
+        setSuccessMessage(
+          result.detail ?? "Plano ativado em modo demonstração — nenhuma cobrança real foi realizada.",
+        );
+        return;
+      }
+      if (result.checkout_url) {
+        window.open(result.checkout_url, "_blank", "noopener,noreferrer");
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Não foi possível iniciar o checkout.");
     } finally {
