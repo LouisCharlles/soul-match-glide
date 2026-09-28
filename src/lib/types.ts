@@ -275,4 +275,7 @@ export interface DateReadiness {
   detectedInterests: string[];
   suggestedCategories: string[];
   categoryLabels: string[];
+  stage?: string;
+  stageConfidence?: number;
+  source?: "gemini" | "heuristic";
 }

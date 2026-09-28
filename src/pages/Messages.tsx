@@ -104,7 +104,18 @@ interface DateIntentPayload {
     latitude: number;
     longitude: number;
   }>;
+  stage?: string;
+  stage_confidence?: number;
+  interests?: string[];
+  tipo_role?: string | null;
 }
+
+const CONVERSATION_STAGE_LABELS: Record<string, string> = {
+  quebra_gelo: "Quebra-gelo",
+  rapport: "Rapport",
+  interesse_mutuo: "Interesse mútuo",
+  pronto_para_role: "Pronto para um rolê",
+};
 
 interface MessageRealtimeEvent {
   type: "message.created" | "message.updated" | "message.read" | "date.intent.detected";
@@ -588,6 +599,20 @@ const Messages = () => {
         if (payload.type === "date.intent.detected") {
           const intentData = payload.data as DateIntentPayload;
           setIntentDetected(true);
+          if (intentData.stage) {
+            const isReadyStage = intentData.stage === "interesse_mutuo" || intentData.stage === "pronto_para_role";
+            setDateReadiness((current) => ({
+              messageCount: current?.messageCount ?? 0,
+              suggestedCategories: current?.suggestedCategories ?? [],
+              categoryLabels: current?.categoryLabels ?? [],
+              ...current,
+              ready: isReadyStage || current?.ready || false,
+              stage: intentData.stage,
+              stageConfidence: intentData.stage_confidence,
+              detectedInterests: intentData.interests ?? current?.detectedInterests ?? [],
+              source: "gemini",
+            }));
+          }
           if (intentData.suggestions?.length) {
             setDateSuggestions(
               intentData.suggestions.map((item) => ({
@@ -1243,6 +1268,17 @@ const Messages = () => {
                   <p className={`text-xs font-body ${selectedMatchOnline ? "text-success" : "text-muted-foreground"}`}>
                     {selectedMatchOnline ? "Online" : "Offline"}
                   </p>
+                  {dateReadiness?.stage ? (
+                    <span
+                      className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[10px] font-body ${
+                        dateReadiness.ready
+                          ? "bg-primary/15 text-primary"
+                          : "bg-muted text-muted-foreground"
+                      }`}
+                    >
+                      {CONVERSATION_STAGE_LABELS[dateReadiness.stage] ?? dateReadiness.stage}
+                    </span>
+                  ) : null}
                 </div>
                 <div className="ml-auto flex shrink-0 items-center gap-2">
                   <Button

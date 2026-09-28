@@ -1391,6 +1391,9 @@ export async function fetchDateReadiness(conversationId: string) {
     detected_interests: string[];
     suggested_categories: string[];
     category_labels: string[];
+    stage?: string;
+    stage_confidence?: number;
+    source?: "gemini" | "heuristic";
   }>(`/conversations/${conversationId}/date-readiness/`, { auth: true });
   return {
     ready: data.ready,
@@ -1398,6 +1401,9 @@ export async function fetchDateReadiness(conversationId: string) {
     detectedInterests: data.detected_interests,
     suggestedCategories: data.suggested_categories,
     categoryLabels: data.category_labels,
+    stage: data.stage,
+    stageConfidence: data.stage_confidence,
+    source: data.source,
   };
 }
 
