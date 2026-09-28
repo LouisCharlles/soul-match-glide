@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AlertCircle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -6,10 +6,12 @@ import { BondingLogo } from "@/components/BondingLogo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import ConsentCheckbox from "@/components/legal/ConsentCheckbox";
 import { useAppExperience } from "@/contexts/AppExperienceContext";
 import { getCopy } from "@/lib/copy";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
+import { fetchCurrentLegalDocuments } from "@/lib/api";
 
 const SignUp = () => {
   const navigate = useNavigate();
@@ -24,6 +26,22 @@ const SignUp = () => {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [documentIds, setDocumentIds] = useState<number[]>([]);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchCurrentLegalDocuments()
+      .then((documents) => {
+        if (isMounted) setDocumentIds(documents.map((doc) => doc.id));
+      })
+      .catch(() => {
+        /* checkbox fica desabilitado abaixo se os documentos não carregarem */
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -37,6 +55,15 @@ const SignUp = () => {
       toast({ title: "Erro", description: "Você deve ter pelo menos 18 anos", variant: "destructive" });
       return;
     }
+    if (!acceptedTerms || documentIds.length === 0) {
+      setErrorMessage("É necessário aceitar os Termos de Uso e a Política de Privacidade.");
+      toast({
+        title: "Erro",
+        description: "É necessário aceitar os Termos de Uso e a Política de Privacidade",
+        variant: "destructive",
+      });
+      return;
+    }
 
     setIsSubmitting(true);
     setErrorMessage("");
@@ -47,6 +74,7 @@ const SignUp = () => {
         email,
         password,
         confirm_password: confirmPassword,
+        accepted_document_ids: documentIds,
       });
 
       if (result.loggedIn) {
@@ -112,9 +140,14 @@ const SignUp = () => {
             <Label className="font-body-bold text-sm">Confirmar senha</Label>
             <Input type="password" placeholder="••••••••" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required className={inputClass} />
           </div>
+          <ConsentCheckbox
+            checked={acceptedTerms}
+            onCheckedChange={setAcceptedTerms}
+            disabled={documentIds.length === 0}
+          />
           <Button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || !acceptedTerms || documentIds.length === 0}
             className="w-full font-body-bold bg-primary text-primary-foreground hover:bg-primary/90 transition-all hover:scale-[1.02] active:scale-95"
           >
             {isSubmitting ? "Criando conta..." : "Criar Conta"}

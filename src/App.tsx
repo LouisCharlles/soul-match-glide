@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import ProfileCompletionRoute from "@/components/ProfileCompletionRoute";
+import ConsentGateRoute from "@/components/ConsentGateRoute";
 import RouteErrorBoundary from "@/components/RouteErrorBoundary";
 import { RealtimeProvider } from "@/contexts/RealtimeContext";
 import { AuthProvider } from "@/lib/auth";
@@ -13,6 +14,10 @@ import SignUp from "./pages/SignUp";
 import EmailVerificationNotice from "./pages/EmailVerificationNotice";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
+import Terms from "./pages/Terms";
+import Privacy from "./pages/Privacy";
+import Tcle from "./pages/Tcle";
+import ConsentUpdate from "./pages/ConsentUpdate";
 import MainLayout from "./components/MainLayout";
 import Settings from "./pages/Settings";
 import Intentions from "./pages/Intentions";
@@ -45,22 +50,28 @@ const App = () => (
             <Route path="/email-verification-sent" element={<EmailVerificationNotice />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password/:userId/:token" element={<ResetPassword />} />
+            <Route path="/terms" element={<Terms />} />
+            <Route path="/privacy" element={<Privacy />} />
+            <Route path="/tcle" element={<Tcle />} />
             <Route element={<ProtectedRoute />}>
-              <Route path="/app/profile-setup" element={<ProfileSetup />} />
-              <Route path="/app/verify" element={<VerifyIdentity />} />
-              <Route element={<ProfileCompletionRoute />}>
-                <Route path="/app" element={<MainLayout />}>
-                  <Route index element={<Discover />} />
-                  <Route path="messages" element={<Messages />} />
-                  <Route path="profile" element={<Profile />} />
-                  <Route path="settings" element={<RouteErrorBoundary title="Configurações"><Settings /></RouteErrorBoundary>} />
-                  <Route path="intentions" element={<Intentions />} />
-                  <Route path="premium" element={<Premium />} />
-                  <Route path="payment" element={<Payment />} />
-                  <Route path="currency" element={<CurrencyWallet />} />
-                  <Route path="likes" element={<Likes />} />
-                  {/* HIDDEN: rota de vídeos premiados — reativar após configurar Ad Manager
-                  <Route path="watch-videos" element={<WatchVideos />} /> */}
+              <Route path="/app/consent-update" element={<ConsentUpdate />} />
+              <Route element={<ConsentGateRoute />}>
+                <Route path="/app/profile-setup" element={<ProfileSetup />} />
+                <Route path="/app/verify" element={<VerifyIdentity />} />
+                <Route element={<ProfileCompletionRoute />}>
+                  <Route path="/app" element={<MainLayout />}>
+                    <Route index element={<Discover />} />
+                    <Route path="messages" element={<Messages />} />
+                    <Route path="profile" element={<Profile />} />
+                    <Route path="settings" element={<RouteErrorBoundary title="Configurações"><Settings /></RouteErrorBoundary>} />
+                    <Route path="intentions" element={<Intentions />} />
+                    <Route path="premium" element={<Premium />} />
+                    <Route path="payment" element={<Payment />} />
+                    <Route path="currency" element={<CurrencyWallet />} />
+                    <Route path="likes" element={<Likes />} />
+                    {/* HIDDEN: rota de vídeos premiados — reativar após configurar Ad Manager
+                    <Route path="watch-videos" element={<WatchVideos />} /> */}
+                  </Route>
                 </Route>
               </Route>
             </Route>

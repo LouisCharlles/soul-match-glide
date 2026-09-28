@@ -1,5 +1,7 @@
 import type {
+  AppConsentStatus,
   AppInterest,
+  AppLegalDocument,
   AppLikeReceived,
   AppMatch,
   AppMessage,
@@ -14,6 +16,7 @@ import type {
   AppVerificationAttempt,
   AppWallet,
   AppWalletEntry,
+  ConsentType,
   DateSuggestion,
   LoginPayload,
   ProfileFormValues,
@@ -49,6 +52,23 @@ interface ApiLocation {
 interface ApiInterest {
   id: number;
   name: string;
+}
+
+interface ApiLegalDocument {
+  id: number;
+  document_type: "terms_of_use" | "privacy_policy" | "research_consent";
+  version_label: string;
+  content: string;
+  content_hash: string;
+  effective_date: string;
+  published_at: string;
+}
+
+interface ApiConsentStatus {
+  consent_type: ConsentType;
+  action: "granted" | "revoked";
+  granted_at: string;
+  is_up_to_date: boolean;
 }
 
 interface ApiPhoto {
@@ -741,6 +761,65 @@ export async function register(payload: SignUpPayload) {
   return request<UserSummary>("/auth/register/", {
     method: "POST",
     body: payload,
+  });
+}
+
+function mapApiLegalDocumentToApp(document: ApiLegalDocument): AppLegalDocument {
+  return {
+    id: document.id,
+    documentType: document.document_type,
+    versionLabel: document.version_label,
+    content: document.content,
+    contentHash: document.content_hash,
+    effectiveDate: document.effective_date,
+    publishedAt: document.published_at,
+  };
+}
+
+export async function fetchCurrentLegalDocuments() {
+  const documents = await request<ApiLegalDocument[]>("/legal/documents/current/");
+  return documents.map(mapApiLegalDocumentToApp);
+}
+
+export async function submitConsent(params: {
+  consentType: ConsentType;
+  documentVersionId?: number;
+  metadata?: Record<string, unknown>;
+}) {
+  return request<{ id: number }>("/consent/", {
+    method: "POST",
+    auth: true,
+    body: {
+      consent_type: params.consentType,
+      document_version_id: params.documentVersionId,
+      metadata: params.metadata ?? {},
+    },
+  });
+}
+
+export async function fetchMyConsents() {
+  const records = await request<ApiConsentStatus[]>("/consent/me/", { auth: true });
+  return records.map<AppConsentStatus>((record) => ({
+    consentType: record.consent_type,
+    action: record.action,
+    grantedAt: record.granted_at,
+    isUpToDate: record.is_up_to_date,
+  }));
+}
+
+export async function deactivateAccount(password: string) {
+  await request<void>("/account/deactivate/", {
+    method: "POST",
+    auth: true,
+    body: { password },
+  });
+}
+
+export async function deleteAccount(password: string) {
+  await request<void>("/account/delete/", {
+    method: "POST",
+    auth: true,
+    body: { password },
   });
 }
 

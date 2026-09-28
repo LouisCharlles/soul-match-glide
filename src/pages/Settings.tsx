@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Globe, Music2, SlidersHorizontal, Sparkles, UserRound } from "lucide-react";
+import { Globe, Music2, ShieldOff, SlidersHorizontal, Sparkles, Trash2, UserRound } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -8,9 +8,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import SpotifyPreviewCard from "@/components/SpotifyPreviewCard";
 import { useAppExperience } from "@/contexts/AppExperienceContext";
-import { fetchMyProfile, searchSpotifyTracks, updateMyProfileSettings } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { deactivateAccount, deleteAccount, fetchMyProfile, searchSpotifyTracks, updateMyProfileSettings } from "@/lib/api";
 import { normalizeAccentColor } from "@/lib/colors";
 import { getCopy } from "@/lib/copy";
 import type { AppProfile, AppSpotifyTrack } from "@/lib/types";
@@ -37,6 +47,17 @@ const Settings = () => {
   const [isSearchingSpotify, setIsSearchingSpotify] = useState(false);
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
   const latestLoadIdRef = useRef(0);
+  const { logout } = useAuth();
+
+  const [isDeactivateDialogOpen, setIsDeactivateDialogOpen] = useState(false);
+  const [deactivatePassword, setDeactivatePassword] = useState("");
+  const [isDeactivating, setIsDeactivating] = useState(false);
+  const [deactivateError, setDeactivateError] = useState("");
+
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   const handleSafeBack = useCallback(() => {
     if (window.history.length > 1) {
@@ -112,6 +133,36 @@ const Settings = () => {
       setErrorMessage(error instanceof Error ? error.message : "Não foi possível salvar suas preferências.");
     } finally {
       setIsSavingPreferences(false);
+    }
+  };
+
+  const handleDeactivateAccount = async () => {
+    setIsDeactivating(true);
+    setDeactivateError("");
+    try {
+      await deactivateAccount(deactivatePassword);
+      setIsDeactivateDialogOpen(false);
+      await logout();
+      navigate("/", { replace: true });
+    } catch (error) {
+      setDeactivateError(error instanceof Error ? error.message : "Não foi possível desativar sua conta.");
+    } finally {
+      setIsDeactivating(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    setIsDeleting(true);
+    setDeleteError("");
+    try {
+      await deleteAccount(deletePassword);
+      setIsDeleteDialogOpen(false);
+      await logout();
+      navigate("/", { replace: true });
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Não foi possível excluir sua conta.");
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -348,6 +399,142 @@ const Settings = () => {
           </p>
         </div>
       </div>
+
+      <div className="card-surface p-5 space-y-4 border-destructive/30">
+        <div className="flex items-center gap-2">
+          <ShieldOff className="h-4 w-4 text-destructive" />
+          <h2 className="font-heading text-lg text-foreground">Privacidade e conta</h2>
+        </div>
+        <p className="text-xs text-muted-foreground font-body">
+          Você pode congelar sua conta temporariamente ou excluí-la permanentemente, conforme os seus direitos
+          previstos na LGPD (art. 18). Consulte nossa{" "}
+          <button
+            type="button"
+            onClick={() => navigate("/privacy")}
+            className="text-primary underline"
+          >
+            Política de Privacidade
+          </button>{" "}
+          para saber como tratamos seus dados após essas ações.
+        </p>
+
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 px-4 py-3">
+          <div>
+            <p className="font-body-bold text-sm text-foreground">Desativar conta</p>
+            <p className="text-xs text-muted-foreground font-body">
+              Congela sua conta e bloqueia o login. Seus dados são mantidos, sem serem apagados.
+            </p>
+          </div>
+          <Button variant="outline" onClick={() => setIsDeactivateDialogOpen(true)}>
+            Desativar
+          </Button>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-destructive/30 px-4 py-3">
+          <div>
+            <p className="font-body-bold text-sm text-foreground">Excluir conta</p>
+            <p className="text-xs text-muted-foreground font-body">
+              Remove permanentemente seus dados pessoais, fotos e verificação. Essa ação não pode ser desfeita.
+            </p>
+          </div>
+          <Button variant="destructive" onClick={() => setIsDeleteDialogOpen(true)}>
+            <Trash2 className="mr-2 h-4 w-4" />
+            Excluir
+          </Button>
+        </div>
+      </div>
+
+      <AlertDialog
+        open={isDeactivateDialogOpen}
+        onOpenChange={(open) => {
+          setIsDeactivateDialogOpen(open);
+          if (!open) {
+            setDeactivatePassword("");
+            setDeactivateError("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Desativar sua conta?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Sua conta ficará inativa e você não conseguirá fazer login até que ela seja reativada pelo suporte.
+              Confirme sua senha para continuar.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            {deactivateError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{deactivateError}</AlertDescription>
+              </Alert>
+            ) : null}
+            <Label htmlFor="deactivate-password" className="font-body-bold text-sm">Senha</Label>
+            <Input
+              id="deactivate-password"
+              type="password"
+              value={deactivatePassword}
+              onChange={(event) => setDeactivatePassword(event.target.value)}
+              placeholder="••••••••"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeactivating}>Cancelar</AlertDialogCancel>
+            <Button
+              variant="outline"
+              disabled={isDeactivating || !deactivatePassword}
+              onClick={() => void handleDeactivateAccount()}
+            >
+              {isDeactivating ? "Desativando..." : "Confirmar desativação"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={(open) => {
+          setIsDeleteDialogOpen(open);
+          if (!open) {
+            setDeletePassword("");
+            setDeleteError("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir sua conta permanentemente?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Seus dados pessoais, fotos e verificação de identidade serão apagados ou anonimizados. Essa ação não
+              pode ser desfeita. Confirme sua senha para continuar.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            {deleteError ? (
+              <Alert variant="destructive">
+                <AlertDescription>{deleteError}</AlertDescription>
+              </Alert>
+            ) : null}
+            <Label htmlFor="delete-password" className="font-body-bold text-sm">Senha</Label>
+            <Input
+              id="delete-password"
+              type="password"
+              value={deletePassword}
+              onChange={(event) => setDeletePassword(event.target.value)}
+              placeholder="••••••••"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancelar</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              disabled={isDeleting || !deletePassword}
+              onClick={() => void handleDeleteAccount()}
+            >
+              {isDeleting ? "Excluindo..." : "Confirmar exclusão"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </section>
   );
 };

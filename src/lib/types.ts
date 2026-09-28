@@ -169,6 +169,37 @@ export interface SignUpPayload extends LoginPayload {
   name: string;
   age: number;
   confirm_password: string;
+  accepted_document_ids: number[];
+}
+
+export type LegalDocumentType = "terms_of_use" | "privacy_policy" | "research_consent";
+
+export interface AppLegalDocument {
+  id: number;
+  documentType: LegalDocumentType;
+  versionLabel: string;
+  content: string;
+  contentHash: string;
+  effectiveDate: string;
+  publishedAt: string;
+}
+
+export type ConsentType =
+  | "general_terms"
+  | "privacy_policy"
+  | "biometric_verification"
+  | "precise_geolocation"
+  | "sensitive_profile_data"
+  | "account_deactivation"
+  | "account_deletion"
+  | "account_reactivation"
+  | "research_consent";
+
+export interface AppConsentStatus {
+  consentType: ConsentType;
+  action: "granted" | "revoked";
+  grantedAt: string;
+  isUpToDate: boolean;
 }
 
 export interface AppWalletEntry {
