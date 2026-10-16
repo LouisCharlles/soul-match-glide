@@ -33,16 +33,18 @@ const ConsentGateRoute = () => {
     };
   }, []);
 
+  // Erro checado antes do loading: no erro isUpToDate continua undefined e a
+  // tela ficava presa em "Verificando consentimento...".
+  if (hasLoadError) {
+    return <Outlet />;
+  }
+
   if (isUpToDate === undefined) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-muted-foreground font-body">
         Verificando consentimento...
       </div>
     );
-  }
-
-  if (hasLoadError) {
-    return <Outlet />;
   }
 
   if (!isUpToDate) {

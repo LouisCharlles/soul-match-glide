@@ -33,16 +33,18 @@ const ProfileCompletionRoute = () => {
     };
   }, []);
 
+  // Erro checado antes do loading: no erro o profile continua undefined e a
+  // tela ficava presa em "Verificando perfil...".
+  if (hasLoadError) {
+    return <Outlet />;
+  }
+
   if (profile === undefined) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background text-muted-foreground font-body">
         Verificando perfil...
       </div>
     );
-  }
-
-  if (hasLoadError) {
-    return <Outlet />;
   }
 
   if (!profile || !isProfileComplete(profileToFormValues(profile))) {
