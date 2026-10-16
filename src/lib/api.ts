@@ -386,11 +386,30 @@ async function refreshAccessToken() {
   const payload = await response.json().catch(() => null);
   if (!response.ok || !payload?.access) {
     await clearStoredTokens();
+    // 5xx (ex.: cold start do Render) nao significa sessao invalida — so
+    // derruba a sessao da UI quando o backend recusou o refresh token.
+    if (response.status < 500) {
+      notifySessionExpired();
+    }
     throw new ApiError("Sua sessão expirou. Faça login novamente.", response.status);
   }
 
   storeAccessToken(payload.access as string);
   return payload.access as string;
+}
+
+type SessionExpiredListener = () => void;
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
+
+function notifySessionExpired() {
+  sessionExpiredListeners.forEach((listener) => listener());
+}
+
+export function onSessionExpired(listener: SessionExpiredListener) {
+  sessionExpiredListeners.add(listener);
+  return () => {
+    sessionExpiredListeners.delete(listener);
+  };
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {

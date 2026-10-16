@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -11,8 +12,10 @@ import {
   clearStoredTokens,
   fetchCurrentUser,
   login as loginRequest,
+  onSessionExpired,
   register as registerRequest,
 } from "@/lib/api";
+import { toast } from "@/hooks/use-toast";
 import type { SignUpPayload, UserSummary } from "@/lib/types";
 
 interface AuthContextValue {
@@ -29,6 +32,24 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserSummary | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const userRef = useRef<UserSummary | null>(null);
+  userRef.current = user;
+
+  // Refresh token recusado com o usuario logado: sem isso a UI seguia como
+  // logada e toda chamada autenticada falhava em silencio.
+  useEffect(
+    () =>
+      onSessionExpired(() => {
+        if (!userRef.current) return;
+        setUser(null);
+        toast({
+          title: "Sua sessão expirou",
+          description: "Faça login novamente para continuar.",
+          variant: "destructive",
+        });
+      }),
+    [],
+  );
 
   useEffect(() => {
     let isMounted = true;
