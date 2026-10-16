@@ -26,6 +26,7 @@ import type {
   UserSummary,
 } from "@/lib/types";
 import { DEFAULT_ACCENT_COLOR, normalizeAccentColor } from "@/lib/colors";
+import { hasAcceptedThirdPartyCookies } from "@/lib/cookieConsent";
 
 type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
 
@@ -751,7 +752,7 @@ export function getApiBaseUrl() {
 export async function login(payload: LoginPayload) {
   const response = await request<TokenResponse>("/api/token/", {
     method: "POST",
-    body: payload,
+    body: { ...payload, third_party_cookies: hasAcceptedThirdPartyCookies() },
   });
   storeAccessToken(response.access);
   return response.user;

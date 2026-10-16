@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { AlertCircle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { BondingLogo } from "@/components/BondingLogo";
+import ThirdPartyCookieNotice from "@/components/ThirdPartyCookieNotice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,6 +11,11 @@ import { useAppExperience } from "@/contexts/AppExperienceContext";
 import { getCopy } from "@/lib/copy";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
+import {
+  getThirdPartyCookieChoice,
+  setThirdPartyCookieChoice,
+  type ThirdPartyCookieChoice,
+} from "@/lib/cookieConsent";
 
 const Login = () => {
   const navigate = useNavigate();
@@ -22,6 +28,12 @@ const Login = () => {
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [cookieChoice, setCookieChoice] = useState<ThirdPartyCookieChoice | null>(getThirdPartyCookieChoice);
+
+  const handleCookieChoice = (choice: ThirdPartyCookieChoice) => {
+    setThirdPartyCookieChoice(choice);
+    setCookieChoice(choice);
+  };
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
@@ -60,6 +72,8 @@ const Login = () => {
           <h1 className="font-display text-4xl text-foreground tracking-tight">Bonding</h1>
           <p className="text-muted-foreground text-sm font-body">{copy.brandTagline}</p>
         </div>
+
+        {cookieChoice === null ? <ThirdPartyCookieNotice onChoose={handleCookieChoice} /> : null}
 
         <form onSubmit={handleLogin} className="card-surface p-6 space-y-4" aria-describedby={errorMessage ? "login-error" : undefined}>
           {errorMessage ? (
@@ -118,6 +132,21 @@ const Login = () => {
             Cadastre-se
           </button>
         </p>
+
+        {cookieChoice !== null ? (
+          <p className="text-center text-xs text-muted-foreground font-body">
+            {cookieChoice === "accepted"
+              ? "Cookies de terceiros aceitos: sua sessão continua ao recarregar."
+              : "Cookies de terceiros recusados: você entrará de novo ao recarregar."}{" "}
+            <button
+              type="button"
+              onClick={() => setCookieChoice(null)}
+              className="text-primary font-body-bold hover:underline"
+            >
+              Alterar
+            </button>
+          </p>
+        ) : null}
       </main>
     </div>
   );
